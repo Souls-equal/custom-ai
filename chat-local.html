@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Custom LLM — 100% navigateur</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161920; --line:#252a35;
+    --txt:#e6e8ee; --dim:#8b93a7; --accent:#6ea8fe; --warn:#f0b429; --ok:#3ddc84;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+  }
+  header{
+    width:100%; border-bottom:1px solid var(--line); background:var(--panel);
+    padding:12px 20px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  }
+  header h1{font-size:15px; margin:0; font-weight:600}
+  .badge{font-size:12px; color:var(--dim); border:1px solid var(--line);
+         padding:3px 9px; border-radius:99px; white-space:nowrap}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+       background:var(--warn);margin-right:6px;vertical-align:middle}
+  .dot.on{background:var(--ok)} .dot.err{background:#ff6b6b}
+  select{
+    margin-left:auto; background:var(--bg); color:var(--txt); font:inherit; font-size:13px;
+    border:1px solid var(--line); border-radius:8px; padding:5px 8px; outline:none;
+  }
+  select:disabled{opacity:.5}
+
+  main{width:100%; max-width:780px; flex:1; display:flex; flex-direction:column; padding:0 20px}
+  #log{flex:1; overflow-y:auto; padding:24px 0 10px}
+
+  .start{margin-top:9vh; text-align:center}
+  .start p{color:var(--dim); font-size:14px; margin:0 0 6px}
+  .start .big{color:var(--txt); font-size:17px; font-weight:600; margin-bottom:14px}
+  .go{
+    background:var(--accent); color:#0b0d12; border:0; border-radius:10px;
+    padding:12px 26px; font:inherit; font-weight:600; cursor:pointer; margin-top:8px;
+  }
+  .go:disabled{opacity:.5; cursor:not-allowed}
+  .small{font-size:12.5px; color:var(--dim); margin-top:14px; line-height:1.7}
+
+  .bar{height:6px; background:var(--line); border-radius:99px; overflow:hidden;
+       margin:18px auto 8px; max-width:420px}
+  .bar i{display:block; height:100%; width:0; background:var(--accent); transition:width .25s}
+
+  .msg{margin-bottom:22px}
+  .who{font-size:11px; text-transform:uppercase; letter-spacing:.9px; color:var(--dim); margin-bottom:6px}
+  .msg.me .who{color:var(--accent)}
+  .bubble{white-space:pre-wrap; word-wrap:break-word}
+  .msg.bot .bubble{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px}
+  .cursor{display:inline-block;width:7px;height:15px;background:var(--accent);
+          vertical-align:-2px;animation:b 1s steps(2) infinite}
+  @keyframes b{50%{opacity:0}}
+
+  form{display:flex; gap:10px; padding:14px 0 22px; border-top:1px solid var(--line)}
+  textarea{flex:1; resize:none; background:var(--panel); color:var(--txt);
+           border:1px solid var(--line); border-radius:10px; padding:11px 13px;
+           font:inherit; max-height:160px; outline:none}
+  textarea:focus{border-color:var(--accent)}
+  textarea:disabled{opacity:.5}
+  form button{background:var(--accent); color:#0b0d12; border:0; border-radius:10px;
+               padding:0 20px; font-weight:600; font-size:14px; cursor:pointer}
+  form button:disabled{opacity:.4; cursor:not-allowed}
+  .err{color:#ff8f8f; font-size:13px; max-width:520px; margin:14px auto 0; text-align:left;
+       background:#2a1a1a; border:1px solid #5c2b2b; border-radius:8px; padding:12px}
+  code{background:#0b0d12; padding:1px 5px; border-radius:4px; font-size:12.5px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Custom LLM</h1>
+  <span class="badge" id="status"><span class="dot"></span>en veille</span>
+  <select id="model" title="Modèle">
+    <option value="HuggingFaceTB/SmolLM2-135M-Instruct">SmolLM2 135M — 112 Mo (le plus rapide)</option>
+    <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M — 260 Mo (équilibré)</option>
+    <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B — 460 Mo (meilleur)</option>
+  </select>
+</header>
+
+<main>
+  <div id="log">
+    <div class="start" id="start">
+      <p class="big">Le modèle tourne dans ton navigateur.</p>
+      <p>Rien à installer. Aucune commande. Aucun serveur.</p>
+      <p>Le navigateur télécharge le modèle <b>une seule fois</b>, puis le garde en mémoire :<br>
+         les fois suivantes, c'est instantané et ça marche même hors ligne.</p>
+      <button class="go" id="go">Démarrer le modèle</button>
+      <div class="bar" id="bar" style="display:none"><i id="fill"></i></div>
+      <p class="small" id="hint"></p>
+    </div>
+  </div>
+
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Démarre le modèle pour discuter…" disabled></textarea>
+    <button id="send" type="submit" disabled>Envoyer</button>
+  </form>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const log=$('log'), form=$('form'), input=$('input'), send=$('send');
+const start=$('start'), go=$('go'), bar=$('bar'), fill=$('fill'), hint=$('hint');
+const statusBox=$('status'), modelSel=$('model');
+
+let generator=null, busy=false;
+let history=[];
+
+function setStatus(text, cls=''){
+  statusBox.innerHTML = '<span class="dot '+cls+'"></span>' + text;
+}
+
+/* ------------------------------------------------------------------ *
+ * Cache maison (IndexedDB)
+ * Le cache standard du navigateur (Cache API) est desactive quand la
+ * page est ouverte en file:// — donc on stocke les poids nous-memes,
+ * sinon le modele serait retelecharge a chaque ouverture.
+ * ------------------------------------------------------------------ */
+const IDB = {
+  db: null,
+  async open(){
+    if(this.db) return this.db;
+    this.db = await new Promise((res, rej) => {
+      const r = indexedDB.open('llm-weights', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('files');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    return this.db;
+  },
+  async get(key){
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      const r = db.transaction('files').objectStore('files').get(key);
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  },
+  async set(key, buf){
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      const t = db.transaction('files', 'readwrite');
+      t.objectStore('files').put(buf, key);
+      t.oncomplete = () => res();
+      t.onerror = () => rej(t.error);
+    });
+  }
+};
+
+const customCache = {
+  async match(request){
+    const key = typeof request === 'string' ? request : request.url;
+    try{
+      const buf = await IDB.get(key);
+      return buf ? new Response(buf) : undefined;
+    }catch(e){ return undefined; }
+  },
+  async put(request, response){
+    const key = typeof request === 'string' ? request : request.url;
+    try{
+      let buf;
+      if(response instanceof Response)      buf = await response.clone().arrayBuffer();
+      else if(response instanceof ArrayBuffer) buf = response;
+      else if(ArrayBuffer.isView(response)) buf = response.buffer;
+      else return;
+      await IDB.set(key, buf);
+    }catch(e){ /* pas de cache : tant pis, on continue */ }
+  }
+};
+
+/* --- chargement de la librairie (avec CDN de secours) --------------- */
+const CDNS = [
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1',
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm',
+  'https://unpkg.com/@huggingface/transformers@3.8.1'
+];
+async function loadLib(){
+  let last;
+  for(const url of CDNS){
+    try{ return await import(url); }catch(e){ last = e; }
+  }
+  throw last;
+}
+
+/* --- demarrage ------------------------------------------------------ */
+go.addEventListener('click', async () => {
+  go.disabled = true; modelSel.disabled = true;
+  bar.style.display = 'block';
+  hint.textContent = 'Connexion…';
+  setStatus('chargement…');
+
+  const modelId = modelSel.value;
+  const files = {};
+
+  try{
+    const { pipeline, TextStreamer, env } = await loadLib();
+
+    env.allowLocalModels = false;              // tout vient du Hub
+    env.useBrowserCache = false;               // indisponible en file://
+    env.useCustomCache = true;
+    env.customCache = customCache;             // notre cache IndexedDB
+    env.backends.onnx.wasm.numThreads = 1;     // evite les Workers (bloques en file://)
+
+    const hasGPU = !!navigator.gpu;
+    const device = hasGPU ? 'webgpu' : 'wasm';
+    const dtype  = hasGPU ? 'q4f16'  : 'q4';
+    hint.textContent = hasGPU
+      ? 'Accélération GPU (WebGPU) détectée.'
+      : 'Pas de WebGPU : exécution sur le processeur, plus lente mais fonctionnelle.';
+
+    generator = await pipeline('text-generation', modelId, {
+      device, dtype,
+      progress_callback: (p) => {
+        if(p.status === 'progress' && p.total){
+          files[p.file] = { loaded: p.loaded, total: p.total };
+          let l = 0, t = 0;
+          for(const k in files){ l += files[k].loaded; t += files[k].total; }
+          const pct = Math.min(100, Math.round(l / t * 100));
+          fill.style.width = pct + '%';
+          hint.textContent = 'Téléchargement du modèle — ' + pct + '% ('
+            + (l/1048576).toFixed(0) + ' / ' + (t/1048576).toFixed(0) + ' Mo). '
+            + 'Une seule fois, ensuite c\u2019est en cache.';
+        }
+        if(p.status === 'ready') hint.textContent = 'Initialisation…';
+      }
+    });
+
+    fill.style.width = '100%';
+    setStatus(modelId.split('/')[1] + ' · ' + device, 'on');
+    start.remove();
+    input.disabled = false; send.disabled = false;
+    input.placeholder = 'Écris ton message…  (Entrée pour envoyer)';
+    input.focus();
+
+  }catch(err){
+    setStatus('erreur', 'err');
+    bar.style.display = 'none';
+    hint.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'err';
+    box.innerHTML = '<b>Le modèle n\u2019a pas pu se charger.</b><br><br>'
+      + 'Causes les plus fréquentes :<br>'
+      + '• pas de connexion internet (nécessaire au tout premier lancement)<br>'
+      + '• navigateur autre que Chrome ou Edge<br>'
+      + '• page ouverte dans un aperçu sans accès réseau<br><br>'
+      + '<code>' + (err && err.message ? err.message : err) + '</code>';
+    start.appendChild(box);
+    go.disabled = false; modelSel.disabled = false;
+  }
+});
+
+/* --- rendu ---------------------------------------------------------- */
+function addMsg(role, text){
+  const el = document.createElement('div');
+  el.className = 'msg ' + (role === 'user' ? 'me' : 'bot');
+  el.innerHTML = '<div class="who">' + (role === 'user' ? 'Toi' : 'Modèle') + '</div>';
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  el.appendChild(b);
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return b;
+}
+
+/* --- generation ----------------------------------------------------- */
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if(!text || busy || !generator) return;
+
+  busy = true; send.disabled = true;
+  input.value = ''; input.style.height = 'auto';
+
+  addMsg('user', text);
+  history.push({ role:'user', content:text });
+
+  const bubble = addMsg('assistant', '');
+  const cursor = document.createElement('span');
+  cursor.className = 'cursor';
+  bubble.appendChild(cursor);
+
+  let answer = '';
+  try{
+    const { TextStreamer } = await loadLib();
+    const streamer = new TextStreamer(generator.tokenizer, {
+      skip_prompt: true,
+      skip_special_tokens: true,
+      callback_function: (t) => {
+        answer += t;
+        bubble.textContent = answer;
+        bubble.appendChild(cursor);
+        log.scrollTop = log.scrollHeight;
+      }
+    });
+
+    const messages = [
+      { role:'system', content:'Tu es un assistant francais utile, clair et concis.' },
+      ...history
+    ];
+
+    await generator(messages, {
+      max_new_tokens: 384,
+      do_sample: true,
+      temperature: 0.7,
+      top_p: 0.9,
+      streamer
+    });
+  }catch(err){
+    answer += '\n\n[erreur] ' + (err && err.message ? err.message : err);
+    bubble.textContent = answer;
+  }
+
+  cursor.remove();
+  answer = answer.trim();
+  bubble.textContent = answer;
+  history.push({ role:'assistant', content:answer });
+  busy = false; send.disabled = false; input.focus();
+});
+
+input.addEventListener('keydown', (e) => {
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); form.requestSubmit(); }
+});
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+});
+</script>
+</body>
+</html>
