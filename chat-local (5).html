@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Custom LLM — 100% navigateur</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161920; --line:#252a35;
+    --txt:#e6e8ee; --dim:#8b93a7; --accent:#6ea8fe; --warn:#f0b429; --ok:#3ddc84;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+  }
+  header{
+    width:100%; border-bottom:1px solid var(--line); background:var(--panel);
+    padding:12px 20px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  }
+  header h1{font-size:15px; margin:0; font-weight:600}
+  .badge{font-size:12px; color:var(--dim); border:1px solid var(--line);
+         padding:3px 9px; border-radius:99px; white-space:nowrap}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+       background:var(--warn);margin-right:6px;vertical-align:middle}
+  .dot.on{background:var(--ok)} .dot.err{background:#ff6b6b}
+  .dot.think{background:var(--accent); animation:pulse 1s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  .spacer{margin-left:auto}
+  select,.mini{
+    background:var(--bg); color:var(--txt); font:inherit; font-size:13px;
+    border:1px solid var(--line); border-radius:8px; padding:5px 9px; outline:none;
+  }
+  .mini{cursor:pointer}
+  .mini:hover{border-color:var(--accent)}
+  select:disabled,.mini:disabled{opacity:.5}
+
+  main{width:100%; max-width:780px; flex:1; display:flex; flex-direction:column; padding:0 20px;
+       min-height:0}
+  #log{flex:1; overflow-y:auto; padding:24px 0 10px; -webkit-overflow-scrolling:touch}
+
+  .start{margin-top:6vh; text-align:center}
+  .start p{color:var(--dim); font-size:14px; margin:0 0 6px}
+  .start .big{color:var(--txt); font-size:17px; font-weight:600; margin-bottom:14px}
+  .go{background:var(--accent); color:#0b0d12; border:0; border-radius:10px;
+      padding:12px 26px; font:inherit; font-weight:600; cursor:pointer; margin-top:10px}
+  .go:disabled{opacity:.5; cursor:not-allowed}
+  .ghost{background:transparent; color:var(--dim); border:1px solid var(--line);
+         border-radius:10px; padding:9px 16px; font:inherit; font-size:13px;
+         cursor:pointer; margin-top:10px; margin-left:8px}
+  .ghost:hover{color:var(--txt); border-color:var(--accent)}
+  .small{font-size:12.5px; color:var(--dim); margin-top:14px; line-height:1.7}
+
+  .bar{height:6px; background:var(--line); border-radius:99px; overflow:hidden;
+       margin:18px auto 8px; max-width:420px}
+  .bar i{display:block; height:100%; width:0; background:var(--accent); transition:width .25s}
+  .saved{font-size:12px; color:var(--ok); margin-top:6px}
+
+  .msg{margin-bottom:22px}
+  .who{font-size:11px; text-transform:uppercase; letter-spacing:.9px; color:var(--dim);
+       margin-bottom:6px; display:flex; align-items:center; gap:8px}
+  .msg.me .who{color:var(--accent)}
+  .bubble{white-space:pre-wrap; word-wrap:break-word}
+  .msg.bot .bubble{background:var(--panel); border:1px solid var(--line);
+                   border-radius:10px; padding:12px 14px; min-height:44px}
+  .cursor{display:inline-block;width:7px;height:15px;background:var(--accent);
+          vertical-align:-2px;animation:b 1s steps(2) infinite}
+  @keyframes b{50%{opacity:0}}
+  /* petit indicateur "ca travaille", visible meme avant le 1er token */
+  .think{display:inline-flex; gap:4px; align-items:center}
+  .think i{width:6px;height:6px;border-radius:50%;background:var(--accent);
+           animation:hop 1.2s infinite}
+  .think i:nth-child(2){animation-delay:.15s}
+  .think i:nth-child(3){animation-delay:.3s}
+  @keyframes hop{0%,60%,100%{opacity:.25;transform:translateY(0)}
+                 30%{opacity:1;transform:translateY(-3px)}}
+  .tag{font-size:10px; border:1px solid var(--line); border-radius:99px;
+       padding:1px 7px; color:var(--dim); text-transform:none; letter-spacing:0}
+
+  .jump{position:sticky; bottom:8px; align-self:center; background:var(--panel);
+        border:1px solid var(--line); color:var(--txt); border-radius:99px;
+        padding:6px 14px; font-size:12.5px; cursor:pointer; display:none}
+  .jump.show{display:block}
+
+  form{display:flex; gap:10px; padding:14px 0 22px; border-top:1px solid var(--line)}
+  textarea{flex:1; resize:none; background:var(--panel); color:var(--txt);
+           border:1px solid var(--line); border-radius:10px; padding:11px 13px;
+           font:inherit; max-height:160px; outline:none}
+  textarea:focus{border-color:var(--accent)}
+  textarea:disabled{opacity:.5}
+  form button{background:var(--accent); color:#0b0d12; border:0; border-radius:10px;
+              padding:0 20px; font-weight:600; font-size:14px; cursor:pointer}
+  form button:disabled{opacity:.4; cursor:not-allowed}
+  form button.stop{background:#ff6b6b}
+  .err{color:#ff8f8f; font-size:13px; max-width:540px; margin:14px auto 0; text-align:left;
+       background:#2a1a1a; border:1px solid #5c2b2b; border-radius:8px; padding:12px}
+  code{background:#0b0d12; padding:1px 5px; border-radius:4px; font-size:12.5px;
+       word-break:break-all}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Custom LLM</h1>
+  <span class="badge" id="status"><span class="dot"></span>en veille</span>
+  <span class="spacer"></span>
+  <button class="mini" id="reset" title="Effacer la conversation">Nouvelle conversation</button>
+  <select id="model" title="Modèle">
+    <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M — léger et correct</option>
+    <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B — le meilleur</option>
+  </select>
+</header>
+
+<main>
+  <div id="log">
+    <div class="start" id="start">
+      <p class="big">Le modèle tourne dans ton navigateur.</p>
+      <p>Rien à installer. Aucune commande. Aucun serveur.</p>
+      <p>Téléchargement <b>repris automatiquement</b>, conversation <b>sauvegardée</b> :<br>
+         page rechargée ou appareil éteint, rien n'est perdu.</p>
+      <p class="small" id="device-note"></p>
+      <div>
+        <button class="go" id="go">Démarrer le modèle</button>
+        <button class="ghost" id="wipe">Vider le cache</button>
+      </div>
+      <div class="bar" id="bar" style="display:none"><i id="fill"></i></div>
+      <p class="small" id="hint"></p>
+      <p class="saved" id="saved"></p>
+    </div>
+  </div>
+  <button class="jump" id="jump">↓ Nouveaux messages</button>
+
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Démarre le modèle pour discuter…" disabled></textarea>
+    <button id="send" type="submit" disabled>Envoyer</button>
+  </form>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const log=$('log'), form=$('form'), input=$('input'), send=$('send'), jump=$('jump');
+const start=$('start'), go=$('go'), wipe=$('wipe'), bar=$('bar'), fill=$('fill');
+const hint=$('hint'), saved=$('saved'), statusBox=$('status'), modelSel=$('model');
+
+let busy=false, history=[], worker=null, ready=false;
+const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+const MAX_TURNS = 6;
+
+const setStatus=(t,c='')=>{ statusBox.innerHTML='<span class="dot '+c+'"></span>'+t; };
+const mo = (n)=>(n/1048576).toFixed(0);
+
+/* ================================================================== *
+ * IndexedDB (thread principal : conversation + entretien du cache)
+ * ================================================================== */
+const IDB = {
+  db:null,
+  async open(){
+    if(this.db) return this.db;
+    this.db = await new Promise((res,rej)=>{
+      const r = indexedDB.open('llm-store', 3);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        for(const s of ['files','chunks','meta','chat'])
+          if(!db.objectStoreNames.contains(s)) db.createObjectStore(s);
+      };
+      r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
+    });
+    return this.db;
+  },
+  async _tx(store, mode, fn){
+    const db = await this.open();
+    return new Promise((res,rej)=>{
+      const t = db.transaction(store, mode);
+      const req = fn(t.objectStore(store));
+      if(req && typeof req.onsuccess !== 'undefined'){
+        req.onsuccess = () => res(req.result);
+        req.onerror   = () => rej(req.error);
+      }else{ t.oncomplete = () => res(undefined); }
+      t.onerror = () => rej(t.error);
+      t.onabort = () => rej(t.error);
+    });
+  },
+  get:  (st,k)   => IDB._tx(st,'readonly',  s=>s.get(k)),
+  set:  (st,k,v) => IDB._tx(st,'readwrite', s=>s.put(v,k)),
+  del:  (st,k)   => IDB._tx(st,'readwrite', s=>s.delete(k)),
+  keys: (st)     => IDB._tx(st,'readonly',  s=>s.getAllKeys()),
+  clear:(st)     => IDB._tx(st,'readwrite', s=>s.clear())
+};
+
+/* ---- sauvegarde de la conversation --------------------------------
+   'history'  : les echanges termines
+   'pending'  : une reponse etait en cours (question + debut de texte) */
+let saveTimer = null;
+function saveChat(pending){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try{
+      await IDB.set('chat','history', history);
+      if(pending) await IDB.set('chat','pending', pending);
+      else        await IDB.del('chat','pending');
+    }catch(e){}
+  }, 250);   // regroupe les ecritures pendant le streaming
+}
+
+/* ================================================================== *
+ * Le Worker : tout le modele tourne LA, pas sur le thread de la page.
+ * C'est ce qui empeche l'ecran de geler pendant la generation.
+ * ================================================================== */
+const WORKER_SRC = `
+const CDNS = [
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1',
+  'https://unpkg.com/@huggingface/transformers@3.8.1'
+];
+let lib=null, generator=null, stopper=null;
+async function loadLib(){
+  if(lib) return lib;
+  let last;
+  for(const u of CDNS){ try{ lib = await import(u); return lib; }catch(e){ last=e; } }
+  throw last;
+}
+
+/* --- IndexedDB (cote worker) --- */
+const IDB = {
+  db:null,
+  async open(){
+    if(this.db) return this.db;
+    this.db = await new Promise((res,rej)=>{
+      const r = indexedDB.open('llm-store', 3);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        for(const s of ['files','chunks','meta','chat'])
+          if(!db.objectStoreNames.contains(s)) db.createObjectStore(s);
+      };
+      r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
+    });
+    return this.db;
+  },
+  async _tx(store,mode,fn){
+    const db = await this.open();
+    return new Promise((res,rej)=>{
+      const t = db.transaction(store,mode);
+      const req = fn(t.objectStore(store));
+      if(req && typeof req.onsuccess !== 'undefined'){
+        req.onsuccess=()=>res(req.result); req.onerror=()=>rej(req.error);
+      }else{ t.oncomplete=()=>res(undefined); }
+      t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error);
+    });
+  },
+  get:(s,k)=>IDB._tx(s,'readonly',o=>o.get(k)),
+  set:(s,k,v)=>IDB._tx(s,'readwrite',o=>o.put(v,k)),
+  del:(s,k)=>IDB._tx(s,'readwrite',o=>o.delete(k))
+};
+
+const customCache = {
+  async match(request){
+    const key = typeof request==='string' ? request : request.url;
+    try{
+      const v = await IDB.get('files', key);
+      const ok = v instanceof Blob || v instanceof ArrayBuffer || ArrayBuffer.isView(v);
+      if(!ok){ if(v!==undefined) await IDB.del('files',key); return undefined; }
+      return new Response(v);
+    }catch(e){ return undefined; }
+  },
+  async put(request, response){
+    const key = typeof request==='string' ? request : request.url;
+    try{
+      const blob = response instanceof Response
+        ? await response.clone().blob() : new Blob([response]);
+      await IDB.set('files', key, blob);
+    }catch(e){}
+  }
+};
+
+/* --- telechargement reprenable, par tranches de 4 Mo --- */
+const CHUNK = 4*1024*1024;
+async function resumableFetch(url, onProgress){
+  let total=0, etag='';
+  try{
+    const h = await fetch(url,{method:'HEAD'});
+    total = parseInt(h.headers.get('content-length')||'0',10);
+    etag  = h.headers.get('etag')||'';
+  }catch(e){}
+  if(!total){ const r = await fetch(url); return await r.blob(); }
+
+  const metaKey='meta:'+url;
+  let meta = await IDB.get('meta', metaKey);
+  if(meta && (meta.etag!==etag || meta.total!==total)){
+    for(let i=0;i<meta.count;i++) await IDB.del('chunks', url+'#'+i);
+    meta=null;
+  }
+  if(!meta){
+    meta={etag,total,count:Math.ceil(total/CHUNK)};
+    meta.done=new Array(meta.count).fill(false);
+    await IDB.set('meta', metaKey, meta);
+  }
+  for(let i=0;i<meta.count;i++){
+    if(meta.done[i]) continue;
+    const s=i*CHUNK, e=Math.min(s+CHUNK,total)-1;
+    let ok=false, err=null;
+    for(let a=0;a<3 && !ok;a++){
+      try{
+        const r = await fetch(url,{headers:{Range:'bytes='+s+'-'+e}});
+        if(r.status!==206 && r.status!==200) throw new Error('HTTP '+r.status);
+        await IDB.set('chunks', url+'#'+i, await r.arrayBuffer());
+        ok=true;
+      }catch(ex){ err=ex; await new Promise(r=>setTimeout(r,800*(a+1))); }
+    }
+    if(!ok) throw err||new Error('tranche '+i+' impossible');
+    meta.done[i]=true;
+    await IDB.set('meta', metaKey, meta);
+    onProgress(Math.min((i+1)*CHUNK,total), total);
+  }
+  const parts=[];
+  for(let i=0;i<meta.count;i++) parts.push(await IDB.get('chunks', url+'#'+i));
+  const blob = new Blob(parts,{type:'application/octet-stream'});
+  for(let i=0;i<meta.count;i++) await IDB.del('chunks', url+'#'+i);
+  await IDB.del('meta', metaKey);
+  return blob;
+}
+
+async function gpuUsable(){
+  if(!self.navigator.gpu) return false;
+  try{ return !!(await self.navigator.gpu.requestAdapter()); }catch(e){ return false; }
+}
+
+self.onmessage = async (ev) => {
+  const m = ev.data;
+
+  if(m.type === 'stop'){ if(stopper) stopper.interrupt(); return; }
+
+  if(m.type === 'load'){
+    try{
+      const { pipeline, env } = await loadLib();
+      env.allowLocalModels=false; env.useBrowserCache=false;
+      env.useCustomCache=true; env.customCache=customCache;
+      env.backends.onnx.wasm.numThreads = 1;
+
+      const useGPU = await gpuUsable();
+      const plans = useGPU
+        ? [{device:'webgpu',dtype:'q4f16',suffix:'_q4f16',label:'GPU (WebGPU)'},
+           {device:'wasm',dtype:'q4',suffix:'_q4',label:'processeur'},
+           {device:'wasm',dtype:'int8',suffix:'_int8',label:'processeur (int8)'}]
+        : [{device:'wasm',dtype:'q4',suffix:'_q4',label:'processeur'},
+           {device:'wasm',dtype:'int8',suffix:'_int8',label:'processeur (int8)'}];
+
+      let label='', lastErr=null;
+      for(const p of plans){
+        try{
+          const url='https://huggingface.co/'+m.modelId+'/resolve/main/onnx/model'+p.suffix+'.onnx';
+          if(await IDB.get('files',url) === undefined){
+            self.postMessage({type:'stage', text:'Récupération du modèle…'});
+            const blob = await resumableFetch(url,(l,t)=>
+              self.postMessage({type:'progress', loaded:l, total:t}));
+            await IDB.set('files', url, blob);
+          }else{
+            self.postMessage({type:'progress', loaded:1, total:1});
+          }
+          self.postMessage({type:'stage', text:'Initialisation du modèle…'});
+          generator = await pipeline('text-generation', m.modelId,
+                                     {device:p.device, dtype:p.dtype});
+          label=p.label; break;
+        }catch(e){ lastErr=e; generator=null;
+          self.postMessage({type:'stage', text:'Configuration refusée, essai suivant…'}); }
+      }
+      if(!generator) throw lastErr;
+      self.postMessage({type:'ready', label});
+    }catch(e){
+      self.postMessage({type:'error', message:(e&&e.message)?e.message:String(e)});
+    }
+    return;
+  }
+
+  if(m.type === 'generate'){
+    try{
+      const { TextStreamer, InterruptableStoppingCriteria } = await loadLib();
+      stopper = new InterruptableStoppingCriteria();
+      const streamer = new TextStreamer(generator.tokenizer, {
+        skip_prompt:true, skip_special_tokens:true,
+        callback_function:(t)=>{ self.postMessage({type:'token', text:t}); }
+      });
+      await generator(m.messages, {
+        max_new_tokens:320, do_sample:true, temperature:0.6,
+        top_p:0.9, repetition_penalty:1.15, streamer,
+        stopping_criteria: stopper
+      });
+      self.postMessage({type:'done'});
+    }catch(e){
+      self.postMessage({type:'genError', message:(e&&e.message)?e.message:String(e)});
+    }
+  }
+};
+`;
+
+function startWorker(){
+  const url = URL.createObjectURL(new Blob([WORKER_SRC], {type:'text/javascript'}));
+  return new Worker(url, { type:'module' });
+}
+
+/* ================================================================== *
+ * Affichage
+ * ================================================================== */
+function nearBottom(){ return log.scrollHeight - log.scrollTop - log.clientHeight < 120; }
+function autoScroll(force){
+  if(force || nearBottom()){ log.scrollTop = log.scrollHeight; jump.classList.remove('show'); }
+  else jump.classList.add('show');
+}
+jump.addEventListener('click', ()=>autoScroll(true));
+log.addEventListener('scroll', ()=>{ if(nearBottom()) jump.classList.remove('show'); });
+
+function addMsg(role, text, tag){
+  const el=document.createElement('div');
+  el.className='msg '+(role==='user'?'me':'bot');
+  const who=document.createElement('div');
+  who.className='who';
+  who.textContent = role==='user' ? 'Toi' : 'Modèle';
+  if(tag){ const s=document.createElement('span'); s.className='tag'; s.textContent=tag; who.appendChild(s); }
+  el.appendChild(who);
+  const b=document.createElement('div');
+  b.className='bubble'; b.textContent=text;
+  el.appendChild(b); log.appendChild(el);
+  autoScroll();
+  return b;
+}
+function thinkingDots(){
+  const d=document.createElement('span');
+  d.className='think'; d.innerHTML='<i></i><i></i><i></i>';
+  return d;
+}
+
+/* ================================================================== *
+ * Generation
+ * ================================================================== */
+function ask(text, restored){
+  return new Promise((resolve) => {
+    busy=true; send.disabled=false; send.textContent='Stop'; send.classList.add('stop');
+    input.disabled=true;
+    setStatus('génération…','think');
+
+    const bubble = addMsg('assistant', restored || '', restored ? 'reprise' : null);
+    const dots = thinkingDots();
+    const cursor = document.createElement('span');
+    cursor.className='cursor';
+    bubble.appendChild(restored ? cursor : dots);
+
+    let answer = restored || '';
+    let first = !restored;
+
+    const finish = (extra) => {
+      worker.removeEventListener('message', onMsg);
+      dots.remove(); cursor.remove();
+      answer = (answer + (extra||'')).trim();
+      bubble.textContent = answer;
+      const t = bubble.parentElement.querySelector('.tag');
+      if(t) t.remove();
+      history.push({role:'assistant', content:answer});
+      saveChat(null);
+      busy=false; send.textContent='Envoyer'; send.classList.remove('stop');
+      input.disabled=false; send.disabled=false;
+      setStatus(statusLabel,'on');
+      input.focus();
+      resolve();
+    };
+
+    const onMsg = (ev) => {
+      const m = ev.data;
+      if(m.type === 'token'){
+        if(first){ dots.remove(); bubble.appendChild(cursor); first=false; }
+        answer += m.text;
+        bubble.textContent = answer;
+        bubble.appendChild(cursor);
+        autoScroll();
+        // sauvegarde continue : si la page meurt, on reprend ici
+        saveChat({ question: text, partial: answer });
+      }
+      else if(m.type === 'done')     finish();
+      else if(m.type === 'genError') finish('\n\n[erreur] ' + m.message);
+    };
+    worker.addEventListener('message', onMsg);
+
+    const messages = [
+      { role:'system', content:
+        'Tu es un assistant francais. Reponds de maniere utile, claire et concise. '
+        + 'Tu te souviens de ce qui a ete dit plus haut dans la conversation.' },
+      ...history.slice(-MAX_TURNS*2)
+    ];
+    worker.postMessage({ type:'generate', messages });
+  });
+}
+
+let statusLabel = '';
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if(busy){                       // le bouton sert de Stop pendant la generation
+    worker.postMessage({type:'stop'});
+    return;
+  }
+  const text = input.value.trim();
+  if(!text || !ready) return;
+  input.value=''; input.style.height='auto';
+  addMsg('user', text);
+  history.push({role:'user', content:text});
+  saveChat({ question:text, partial:'' });
+  await ask(text);
+});
+
+$('reset').addEventListener('click', async () => {
+  history = [];
+  await IDB.del('chat','history'); await IDB.del('chat','pending');
+  log.querySelectorAll('.msg').forEach(n=>n.remove());
+  input.focus();
+});
+
+/* ================================================================== *
+ * Demarrage
+ * ================================================================== */
+async function gpuUsableMain(){
+  if(!navigator.gpu) return false;
+  try{ return !!(await navigator.gpu.requestAdapter()); }catch(e){ return false; }
+}
+
+(async () => {
+  const note=$('device-note');
+  note.innerHTML = (await gpuUsableMain())
+    ? 'Accélération GPU disponible sur cet appareil.'
+    : 'Pas d\u2019accélération GPU ici — exécution sur le processeur, plus lente.';
+  try{
+    const ks = await IDB.keys('meta');
+    if(ks && ks.length) saved.textContent = '↻ Téléchargement interrompu détecté : il reprendra où il s\u2019était arrêté.';
+    const h = await IDB.get('chat','history');
+    if(h && h.length) saved.textContent += (saved.textContent?' ':'')
+      + '💬 Conversation précédente retrouvée (' + h.length + ' messages).';
+  }catch(e){}
+})();
+
+wipe.addEventListener('click', async () => {
+  await IDB.clear('files'); await IDB.clear('chunks'); await IDB.clear('meta');
+  saved.textContent='Cache du modèle vidé (la conversation est conservée).';
+});
+
+go.addEventListener('click', async () => {
+  go.disabled=true; wipe.disabled=true; modelSel.disabled=true;
+  bar.style.display='block'; hint.textContent='Préparation…';
+  setStatus('chargement…');
+  try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
+  let lock=null;
+  try{ if(navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); }catch(e){}
+
+  try{ worker = startWorker(); }
+  catch(e){
+    hint.innerHTML='<span style="color:#ff8f8f">Impossible de démarrer le worker : '+e.message+'</span>';
+    go.disabled=false; wipe.disabled=false; modelSel.disabled=false; return;
+  }
+
+  const modelId = modelSel.value;
+
+  const onLoad = async (ev) => {
+    const m = ev.data;
+    if(m.type === 'stage')    hint.textContent = m.text;
+    else if(m.type === 'progress'){
+      const pct = Math.round(m.loaded/m.total*100);
+      fill.style.width = pct+'%';
+      if(m.total > 1){
+        hint.textContent = 'Récupération — '+pct+'% ('+mo(m.loaded)+' / '+mo(m.total)+' Mo)';
+        saved.textContent = '✓ '+mo(m.loaded)+' Mo enregistrés — tu peux fermer la page.';
+      }
+    }
+    else if(m.type === 'ready'){
+      worker.removeEventListener('message', onLoad);
+      try{ if(lock) await lock.release(); }catch(e){}
+      statusLabel = modelId.split('/')[1]+' · '+m.label;
+      setStatus(statusLabel,'on');
+      ready = true;
+      start.remove();
+      input.disabled=false; send.disabled=false;
+      input.placeholder='Écris ton message…  (Entrée pour envoyer)';
+      input.focus();
+      await restoreChat();
+    }
+    else if(m.type === 'error'){
+      worker.removeEventListener('message', onLoad);
+      try{ if(lock) await lock.release(); }catch(e){}
+      setStatus('erreur','err'); bar.style.display='none';
+      const box=document.createElement('div'); box.className='err';
+      let advice;
+      if(/memory|allocation|RangeError|buffer|Aborted|OOM/i.test(m.message))
+        advice='L\u2019appareil a manqué de mémoire. Choisis <b>SmolLM2 360M</b> et ferme les autres onglets. Le téléchargement déjà fait est conservé.';
+      else if(/fetch|network|Failed to fetch/i.test(m.message))
+        advice='Connexion interrompue. Relance : le téléchargement <b>reprendra où il s\u2019est arrêté</b>.';
+      else
+        advice='Relance le chargement : ce qui a été récupéré est conservé.';
+      box.innerHTML='<b>Le modèle n\u2019a pas pu se charger.</b><br><br>'+advice
+                   +'<br><br><code>'+m.message+'</code>';
+      start.appendChild(box);
+      go.disabled=false; wipe.disabled=false; modelSel.disabled=false;
+    }
+  };
+  worker.addEventListener('message', onLoad);
+  worker.postMessage({ type:'load', modelId });
+});
+
+/* ---- reprise de la conversation ------------------------------------ */
+async function restoreChat(){
+  let h=null, pending=null;
+  try{
+    h = await IDB.get('chat','history');
+    pending = await IDB.get('chat','pending');
+  }catch(e){}
+  if(Array.isArray(h) && h.length){
+    history = h;
+    for(const m of h) addMsg(m.role, m.content);
+    autoScroll(true);
+  }
+  if(pending && pending.question){
+    // Une reponse etait en cours quand la page s'est fermee.
+    // Le contexte interne du modele est perdu : on relance la reponse,
+    // en repartant du texte deja ecrit s'il y en avait.
+    const note = addMsg('assistant',
+      'Réponse interrompue — je la reprends…', 'reprise');
+    await new Promise(r=>setTimeout(r,600));
+    note.parentElement.remove();
+    if(history.length && history[history.length-1].role === 'user'){
+      await ask(pending.question);
+    }else{
+      await IDB.del('chat','pending');
+    }
+  }
+}
+
+input.addEventListener('keydown',(e)=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); form.requestSubmit(); }
+});
+input.addEventListener('input',()=>{
+  input.style.height='auto';
+  input.style.height=Math.min(input.scrollHeight,160)+'px';
+});
+</script>
+</body>
+</html>
