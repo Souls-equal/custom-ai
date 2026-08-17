@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Custom LLM</title>
+<style>
+  /* ==================================================================
+     Theme tokens
+     ================================================================== */
+  :root{
+    --bg:#07080c; --bg2:#0b0d14;
+    --panel:rgba(20,23,33,.62); --panel-solid:#12151f;
+    --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.16);
+    --txt:#eef1f8; --dim:#8b93a7;
+    --accent:#7c8cff; --accent-2:#4fd1c5; --accent-3:#c77dff;
+    --warn:#f0b429; --ok:#3ddc84; --danger:#ff6b6b;
+    --onaccent:#080a10; --code:rgba(0,0,0,.35);
+    --errbg:rgba(70,20,26,.5); --errline:rgba(255,107,107,.3); --errtxt:#ffb4b4;
+    --hover:rgba(255,255,255,.06);
+    --glass-blur:22px;
+    --shadow:0 18px 50px -12px rgba(0,0,0,.7);
+    --ring:rgba(124,140,255,.35);
+    --aurora-1:#7c8cff; --aurora-2:#4fd1c5; --aurora-3:#c77dff; --aurora-a:.30;
+    --grain:.035;
+  }
+  html[data-theme="light"]{
+    --bg:#f7f8fc; --bg2:#eef1f8;
+    --panel:rgba(255,255,255,.72); --panel-solid:#ffffff;
+    --line:rgba(10,15,40,.09); --line-2:rgba(10,15,40,.16);
+    --txt:#111524; --dim:#5d6479;
+    --accent:#5566f5; --accent-2:#0d9488; --accent-3:#9333ea;
+    --warn:#b45309; --ok:#15803d; --danger:#dc2626;
+    --onaccent:#ffffff; --code:rgba(10,15,40,.06);
+    --errbg:rgba(254,226,226,.8); --errline:rgba(220,38,38,.25); --errtxt:#b42318;
+    --hover:rgba(10,15,40,.05);
+    --shadow:0 18px 45px -14px rgba(20,30,80,.25);
+    --ring:rgba(85,102,245,.28);
+    --aurora-a:.22; --grain:.02;
+  }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font:15px/1.65 "Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-feature-settings:"cv02","cv03","ss01";
+    -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:row; overflow:hidden;
+    letter-spacing:-.005em;
+  }
+  ::selection{background:color-mix(in oklab, var(--accent) 40%, transparent)}
+
+  /* ==================================================================
+     Animated aurora backdrop + film grain
+     ================================================================== */
+  #bgfx{position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden;
+        background:radial-gradient(120% 90% at 50% -10%, var(--bg2), var(--bg) 70%)}
+  #bgfx b{
+    position:absolute; display:block; border-radius:50%;
+    filter:blur(90px); opacity:var(--aurora-a); mix-blend-mode:screen;
+    will-change:transform;
+  }
+  html[data-theme="light"] #bgfx b{mix-blend-mode:multiply; filter:blur(80px)}
+  #bgfx b:nth-child(1){width:52vw;height:52vw;left:-12vw;top:-16vw;
+    background:radial-gradient(circle, var(--aurora-1), transparent 65%); animation:drift1 26s ease-in-out infinite}
+  #bgfx b:nth-child(2){width:46vw;height:46vw;right:-10vw;top:6vh;
+    background:radial-gradient(circle, var(--aurora-2), transparent 65%); animation:drift2 31s ease-in-out infinite}
+  #bgfx b:nth-child(3){width:44vw;height:44vw;left:26vw;bottom:-18vw;
+    background:radial-gradient(circle, var(--aurora-3), transparent 65%); animation:drift3 37s ease-in-out infinite}
+  @keyframes drift1{0%,100%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(8vw,6vh,0) scale(1.18)}}
+  @keyframes drift2{0%,100%{transform:translate3d(0,0,0) scale(1.1)}50%{transform:translate3d(-7vw,9vh,0) scale(.92)}}
+  @keyframes drift3{0%,100%{transform:translate3d(0,0,0) scale(.95)}50%{transform:translate3d(5vw,-7vh,0) scale(1.15)}}
+  #bgfx::after{
+    content:""; position:absolute; inset:-200%; opacity:var(--grain);
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation:grain 7s steps(6) infinite;
+  }
+  @keyframes grain{
+    0%{transform:translate(0,0)}20%{transform:translate(-4%,3%)}40%{transform:translate(3%,-4%)}
+    60%{transform:translate(-3%,-3%)}80%{transform:translate(4%,4%)}100%{transform:translate(0,0)}
+  }
+
+  /* ==================================================================
+     Shared glass surface + pointer-tracking glow border
+     ================================================================== */
+  .glass{
+    background:var(--panel);
+    -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(160%);
+    backdrop-filter:blur(var(--glass-blur)) saturate(160%);
+    border:1px solid var(--line);
+  }
+  .spot{position:relative; isolation:isolate}
+  .spot::before{
+    content:""; position:absolute; inset:0; border-radius:inherit; padding:1px;
+    background:radial-gradient(180px circle at var(--mx,50%) var(--my,50%),
+               color-mix(in oklab, var(--accent) 75%, transparent), transparent 60%);
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor; mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite:exclude;
+    opacity:0; transition:opacity .3s; pointer-events:none; z-index:2;
+  }
+  .spot:hover::before{opacity:1}
+
+  /* ==================================================================
+     Layout
+     ================================================================== */
+  .app{position:relative; z-index:1; flex:1; min-width:0; display:flex;
+       flex-direction:column; align-items:center; height:100%}
+  header{
+    position:relative; z-index:3; width:100%;
+    border-bottom:1px solid var(--line);
+    background:color-mix(in oklab, var(--panel-solid) 55%, transparent);
+    -webkit-backdrop-filter:blur(18px) saturate(160%);
+    backdrop-filter:blur(18px) saturate(160%);
+    padding:11px 18px; display:flex; align-items:center; gap:11px; flex-wrap:wrap;
+  }
+  header h1{
+    font-size:14.5px; margin:0; font-weight:650; letter-spacing:-.01em;
+    background:linear-gradient(92deg, var(--txt) 0%, var(--accent) 30%, var(--accent-3) 50%,
+                               var(--accent) 70%, var(--txt) 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    background-size:220% auto; animation:shine 9s linear infinite;
+  }
+  @keyframes shine{to{background-position:200% center}}
+
+  .badge{
+    font-size:11.5px; color:var(--dim); border:1px solid var(--line);
+    padding:4px 11px; border-radius:99px; white-space:nowrap;
+    background:var(--hover); display:inline-flex; align-items:center;
+  }
+  .dot{
+    display:inline-block; width:7px; height:7px; border-radius:50%;
+    background:var(--warn); margin-right:7px; flex:0 0 7px;
+    box-shadow:0 0 0 0 color-mix(in oklab, var(--warn) 60%, transparent);
+  }
+  .dot.on{background:var(--ok); animation:halo 2.6s ease-out infinite;
+          --hc:color-mix(in oklab, var(--ok) 55%, transparent)}
+  .dot.err{background:var(--danger)}
+  .dot.think{background:var(--accent); animation:halo 1.3s ease-out infinite;
+             --hc:color-mix(in oklab, var(--accent) 60%, transparent)}
+  @keyframes halo{
+    0%{box-shadow:0 0 0 0 var(--hc)}
+    70%{box-shadow:0 0 0 7px transparent}
+    100%{box-shadow:0 0 0 0 transparent}
+  }
+  .spacer{margin-left:auto}
+
+  select,.mini{
+    background:var(--hover); color:var(--txt); font:inherit; font-size:12.5px;
+    border:1px solid var(--line); border-radius:10px; padding:6px 10px; outline:none;
+    transition:border-color .2s, background .2s, transform .15s;
+  }
+  select{-webkit-appearance:none; appearance:none; padding-right:26px; cursor:pointer;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b93a7' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right 9px center}
+  select option{background:var(--panel-solid); color:var(--txt)}
+  .mini{cursor:pointer}
+  select:hover,.mini:hover{border-color:var(--line-2)}
+  .mini:active{transform:scale(.97)}
+  select:focus-visible,.mini:focus-visible,button:focus-visible,textarea:focus-visible,input:focus-visible{
+    outline:none; box-shadow:0 0 0 3px var(--ring)}
+  select:disabled,.mini:disabled{opacity:.45}
+
+  main{width:100%; max-width:790px; flex:1; display:flex; flex-direction:column;
+       padding:0 20px; min-height:0; align-self:center}
+  #log{flex:1; overflow-y:auto; padding:26px 0 10px; scroll-behavior:smooth;
+       -webkit-overflow-scrolling:touch; scrollbar-width:thin;
+       scrollbar-color:var(--line-2) transparent}
+  #log::-webkit-scrollbar{width:8px}
+  #log::-webkit-scrollbar-thumb{background:var(--line-2); border-radius:99px}
+  #log::-webkit-scrollbar-track{background:transparent}
+
+  /* ==================================================================
+     Sidebar
+     ================================================================== */
+  #sidebar{
+    position:relative; z-index:2;
+    width:262px; flex:0 0 262px; height:100%;
+    background:color-mix(in oklab, var(--panel-solid) 62%, transparent);
+    -webkit-backdrop-filter:blur(20px) saturate(150%);
+    backdrop-filter:blur(20px) saturate(150%);
+    border-right:1px solid var(--line); display:flex; flex-direction:column;
+    transition:margin-left .34s cubic-bezier(.22,1,.36,1), opacity .28s;
+  }
+  body.closed #sidebar{margin-left:-262px; opacity:0}
+  .side-top{padding:11px; display:flex; gap:8px; align-items:center;
+            border-bottom:1px solid var(--line)}
+  #chats{flex:1; overflow-y:auto; padding:9px 8px; scrollbar-width:thin;
+         scrollbar-color:var(--line-2) transparent}
+  #chats::-webkit-scrollbar{width:6px}
+  #chats::-webkit-scrollbar-thumb{background:var(--line-2); border-radius:99px}
+  .side-label{font-size:10.5px; text-transform:uppercase; letter-spacing:.11em;
+              color:var(--dim); padding:6px 10px 4px; opacity:.75}
+  .chat-item{
+    position:relative; display:flex; align-items:center; gap:7px;
+    border-radius:10px; padding:8px 10px; cursor:pointer;
+    font-size:13.5px; color:var(--dim); overflow:hidden;
+    transition:color .18s, background .18s, transform .18s;
+    animation:slidein .32s cubic-bezier(.22,1,.36,1) both;
+  }
+  @keyframes slidein{from{opacity:0; transform:translateX(-10px)}to{opacity:1; transform:none}}
+  .chat-item::before{
+    content:""; position:absolute; left:0; top:50%; width:2px; height:0;
+    background:linear-gradient(var(--accent), var(--accent-3));
+    border-radius:99px; transform:translateY(-50%); transition:height .25s;
+  }
+  .chat-item:hover{background:var(--hover); color:var(--txt)}
+  .chat-item.active{background:var(--hover); color:var(--txt)}
+  .chat-item.active::before{height:56%}
+  .chat-item span{flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .chat-item b{
+    font-weight:400; opacity:0; padding:1px 5px; border-radius:6px; font-size:12px;
+    transition:opacity .18s, color .18s, background .18s;
+  }
+  .chat-item:hover b{opacity:.55}
+  .chat-item b:hover{opacity:1; color:var(--danger); background:var(--hover)}
+  .side-bottom{border-top:1px solid var(--line); padding:9px}
+  .side-btn{
+    width:100%; text-align:left; background:transparent; color:var(--txt);
+    border:0; border-radius:10px; padding:9px 10px; font:inherit; font-size:13.5px;
+    cursor:pointer; display:flex; align-items:center; gap:9px;
+    transition:background .18s, transform .15s;
+  }
+  .side-btn:hover{background:var(--hover)}
+  .side-btn:active{transform:scale(.985)}
+  .side-btn .icon{color:var(--dim); transition:color .2s, transform .35s}
+  .side-btn:hover .icon{color:var(--accent)}
+  #opensettings:hover .icon{transform:rotate(90deg)}
+  #newchat:hover .icon{transform:rotate(90deg) scale(1.1)}
+  .icon{width:16px; height:16px; flex:0 0 16px; stroke:currentColor; fill:none;
+        stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round}
+  #burger,#burger-in{
+    background:transparent; border:0; color:var(--dim); cursor:pointer;
+    padding:6px; border-radius:9px; display:flex; align-items:center;
+    transition:background .18s, color .18s;
+  }
+  #burger:hover,#burger-in:hover{background:var(--hover); color:var(--txt)}
+
+  /* ==================================================================
+     Welcome screen
+     ================================================================== */
+  .start{margin-top:5vh; text-align:center; animation:rise .6s cubic-bezier(.22,1,.36,1) both}
+  .start.compact{
+    margin:0 0 26px; padding:13px 15px; border-radius:14px;
+    background:var(--panel); border:1px solid var(--line);
+    -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);
+    display:flex; align-items:center; gap:13px; text-align:left; flex-wrap:wrap;
+  }
+  .start.compact .orb{width:32px; height:32px; margin:0; flex:0 0 32px}
+  .start.compact .orb::after{inset:4px}
+  .start.compact .big{
+    font-size:14px; margin:0; flex:1 1 150px; min-width:0; line-height:1.35;
+    font-weight:600; letter-spacing:-.01em;
+  }
+  .start.compact p:not(.big):not(.small):not(.saved){display:none}
+  .start.compact #device-note{display:none}
+  .start.compact > div{margin:0; display:flex; gap:8px; flex:0 0 auto}
+  .start.compact .go{margin:0; padding:9px 17px; font-size:13px; white-space:nowrap}
+  .start.compact .ghost{margin:0; padding:8px 14px; white-space:nowrap}
+  .start.compact .small,.start.compact .saved{margin:0; flex:1 1 100%; font-size:12px}
+  .start.compact .saved:empty,.start.compact .small:empty{display:none}
+  .start.compact .bar{margin:2px 0 0; max-width:none; width:100%; flex:1 1 100%}
+  @keyframes rise{from{opacity:0; transform:translateY(14px)}to{opacity:1; transform:none}}
+  .start p{color:var(--dim); font-size:14px; margin:0 0 6px}
+  .start .big{
+    font-size:clamp(22px,4.4vw,32px); font-weight:700; letter-spacing:-.03em;
+    line-height:1.2; margin:0 0 12px; color:var(--txt);
+    background:linear-gradient(180deg, var(--txt), color-mix(in oklab, var(--txt) 55%, transparent));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .orb{
+    width:76px; height:76px; margin:0 auto 22px; border-radius:50%;
+    background:conic-gradient(from 0deg, var(--accent), var(--accent-2), var(--accent-3), var(--accent));
+    filter:blur(.4px); animation:spin 8s linear infinite, breathe 4s ease-in-out infinite;
+    position:relative;
+  }
+  .orb::after{
+    content:""; position:absolute; inset:7px; border-radius:50%;
+    background:var(--bg); box-shadow:inset 0 0 22px rgba(0,0,0,.5);
+  }
+  html[data-theme="light"] .orb::after{box-shadow:inset 0 0 22px rgba(20,30,80,.12)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes breathe{0%,100%{box-shadow:0 0 34px -6px var(--accent)}50%{box-shadow:0 0 58px 2px var(--accent-3)}}
+
+  .go{
+    position:relative; overflow:hidden;
+    background:linear-gradient(120deg, var(--accent), var(--accent-3));
+    color:#fff; border:0; border-radius:12px;
+    padding:13px 30px; font:inherit; font-weight:650; font-size:14.5px; cursor:pointer;
+    margin-top:12px; box-shadow:0 10px 30px -10px var(--accent);
+    transition:transform .18s cubic-bezier(.22,1,.36,1), box-shadow .25s, filter .2s;
+  }
+  .go::after{
+    content:""; position:absolute; inset:0;
+    background:linear-gradient(105deg, transparent 35%, rgba(255,255,255,.45) 50%, transparent 65%);
+    transform:translateX(-120%); transition:none;
+  }
+  .go:hover{transform:translateY(-2px); box-shadow:0 16px 40px -12px var(--accent)}
+  .go:hover::after{animation:sweep .85s ease}
+  @keyframes sweep{to{transform:translateX(120%)}}
+  .go:active{transform:translateY(0) scale(.98)}
+  .go:disabled{opacity:.45; cursor:not-allowed; filter:grayscale(.4)}
+  .go:disabled:hover{transform:none}
+
+  .ghost{
+    background:var(--hover); color:var(--dim); border:1px solid var(--line);
+    border-radius:12px; padding:11px 18px; font:inherit; font-size:13px;
+    cursor:pointer; margin-top:12px; margin-left:9px;
+    transition:color .2s, border-color .2s, transform .15s;
+  }
+  .ghost:hover{color:var(--txt); border-color:var(--line-2)}
+  .ghost:active{transform:scale(.97)}
+  .small{font-size:12.5px; color:var(--dim); margin-top:16px; line-height:1.7}
+
+  .bar{
+    height:7px; background:var(--hover); border:1px solid var(--line);
+    border-radius:99px; overflow:hidden; margin:20px auto 9px; max-width:430px;
+  }
+  .bar i{
+    display:block; height:100%; width:0; border-radius:99px;
+    background:linear-gradient(90deg, var(--accent), var(--accent-2), var(--accent-3));
+    background-size:220% 100%;
+    transition:width .3s cubic-bezier(.22,1,.36,1);
+    animation:flow 2.6s linear infinite; box-shadow:0 0 14px -2px var(--accent);
+  }
+  @keyframes flow{to{background-position:220% 0}}
+  .saved{font-size:12px; color:var(--ok); margin-top:7px}
+
+  /* ==================================================================
+     Messages
+     ================================================================== */
+  .msg{margin-bottom:24px; animation:pop .42s cubic-bezier(.22,1,.36,1) both}
+  @keyframes pop{from{opacity:0; transform:translateY(10px)}to{opacity:1; transform:none}}
+  .who{
+    font-size:10.5px; text-transform:uppercase; letter-spacing:.12em; color:var(--dim);
+    margin-bottom:7px; display:flex; align-items:center; gap:8px; font-weight:600;
+  }
+  .msg.me .who{
+    background:linear-gradient(90deg, var(--accent), var(--accent-2));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .bubble{white-space:pre-wrap; word-wrap:break-word}
+  .msg.me .bubble{
+    background:color-mix(in oklab, var(--accent) 11%, transparent);
+    border:1px solid color-mix(in oklab, var(--accent) 22%, transparent);
+    border-radius:14px 14px 14px 4px; padding:11px 14px;
+  }
+  .msg.bot .bubble{
+    position:relative;
+    background:var(--panel);
+    -webkit-backdrop-filter:blur(14px) saturate(150%);
+    backdrop-filter:blur(14px) saturate(150%);
+    border:1px solid var(--line); border-radius:14px 14px 4px 14px;
+    padding:13px 15px; min-height:46px; box-shadow:var(--shadow);
+  }
+  .cursor{
+    display:inline-block; width:8px; height:15px; border-radius:2px;
+    background:linear-gradient(var(--accent), var(--accent-3));
+    vertical-align:-2px; animation:b 1.05s steps(2) infinite;
+  }
+  @keyframes b{50%{opacity:0}}
+  /* "working" indicator, visible before the first token */
+  .think{display:inline-flex; gap:5px; align-items:center}
+  .think i{
+    width:6px; height:6px; border-radius:50%;
+    background:linear-gradient(var(--accent), var(--accent-3));
+    animation:hop 1.25s cubic-bezier(.4,0,.2,1) infinite;
+  }
+  .think i:nth-child(2){animation-delay:.14s}
+  .think i:nth-child(3){animation-delay:.28s}
+  @keyframes hop{
+    0%,60%,100%{opacity:.25; transform:translateY(0) scale(.85)}
+    30%{opacity:1; transform:translateY(-5px) scale(1)}
+  }
+  .tag{
+    font-size:10px; border:1px solid var(--line); border-radius:99px;
+    padding:2px 8px; color:var(--dim); text-transform:none; letter-spacing:0;
+    background:var(--hover); font-weight:400;
+  }
+
+  .jump{
+    position:sticky; bottom:10px; align-self:center;
+    background:var(--panel); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);
+    border:1px solid var(--line-2); color:var(--txt); border-radius:99px;
+    padding:7px 16px; font-size:12.5px; cursor:pointer; display:none;
+    box-shadow:var(--shadow); animation:pop .3s both;
+    transition:transform .15s, border-color .2s;
+  }
+  .jump:hover{transform:translateY(-1px); border-color:var(--accent)}
+  .jump.show{display:block}
+
+  /* ==================================================================
+     Composer
+     ================================================================== */
+  form{
+    display:flex; gap:10px; padding:13px; margin:0 0 18px;
+    border:1px solid var(--line); border-radius:16px;
+    background:var(--panel);
+    -webkit-backdrop-filter:blur(18px) saturate(160%);
+    backdrop-filter:blur(18px) saturate(160%);
+    box-shadow:var(--shadow);
+    transition:border-color .25s, box-shadow .25s;
+  }
+  form:focus-within{
+    border-color:color-mix(in oklab, var(--accent) 45%, transparent);
+    box-shadow:var(--shadow), 0 0 0 3px var(--ring);
+  }
+  textarea{
+    flex:1; resize:none; background:transparent; color:var(--txt);
+    border:0; padding:8px 6px; font:inherit; max-height:170px; outline:none;
+  }
+  textarea::placeholder{color:var(--dim)}
+  textarea:disabled{opacity:.5}
+  form button{
+    position:relative; overflow:hidden;
+    background:linear-gradient(120deg, var(--accent), var(--accent-3));
+    color:#fff; border:0; border-radius:11px;
+    padding:0 20px; font-weight:650; font-size:14px; cursor:pointer;
+    box-shadow:0 8px 22px -10px var(--accent);
+    transition:transform .16s cubic-bezier(.22,1,.36,1), box-shadow .22s, filter .2s;
+  }
+  form button:hover:not(:disabled){transform:translateY(-1px); box-shadow:0 12px 28px -10px var(--accent)}
+  form button:active:not(:disabled){transform:scale(.97)}
+  form button:disabled{opacity:.4; cursor:not-allowed; filter:grayscale(.5); box-shadow:none}
+  form button.stop{
+    background:linear-gradient(120deg, var(--danger), #ff9a6b);
+    box-shadow:0 8px 22px -10px var(--danger);
+    animation:throb 1.6s ease-in-out infinite;
+  }
+  @keyframes throb{0%,100%{filter:brightness(1)}50%{filter:brightness(1.14)}}
+
+  .err{
+    color:var(--errtxt); font-size:13px; max-width:545px; margin:16px auto 0; text-align:left;
+    background:var(--errbg); border:1px solid var(--errline); border-radius:12px; padding:13px;
+    -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+    animation:pop .35s both;
+  }
+  code{background:var(--code); padding:2px 6px; border-radius:5px; font-size:12.5px;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all}
+
+  /* ==================================================================
+     Settings sheet
+     ================================================================== */
+  #settings{
+    position:fixed; inset:0; display:none; z-index:40;
+    align-items:center; justify-content:center; padding:20px;
+    background:color-mix(in oklab, var(--bg) 55%, transparent);
+    -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+  }
+  #settings.show{display:flex; animation:fade .22s both}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .sheet{
+    position:relative; width:100%; max-width:430px; padding:20px 22px;
+    background:color-mix(in oklab, var(--panel-solid) 88%, transparent);
+    -webkit-backdrop-filter:blur(26px) saturate(170%);
+    backdrop-filter:blur(26px) saturate(170%);
+    border:1px solid var(--line-2); border-radius:18px; box-shadow:var(--shadow);
+    animation:sheetin .34s cubic-bezier(.22,1,.36,1) both;
+  }
+  @keyframes sheetin{from{opacity:0; transform:translateY(16px) scale(.97)}to{opacity:1; transform:none}}
+  .sheet h2{
+    margin:0 0 16px; font-size:15px; font-weight:650; letter-spacing:-.01em;
+    display:flex; align-items:center; gap:9px;
+  }
+  .sheet h2::before{
+    content:""; width:4px; height:15px; border-radius:99px;
+    background:linear-gradient(var(--accent), var(--accent-3));
+  }
+  .row{display:flex; align-items:center; gap:12px; padding:13px 0; border-top:1px solid var(--line)}
+  .row:first-of-type{border-top:0; padding-top:2px}
+  .row label{flex:1; font-size:13.5px; font-weight:500}
+  .row .note{display:block; font-size:11.5px; color:var(--dim); font-weight:400; margin-top:1px}
+  .seg{
+    display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden;
+    background:var(--hover);
+  }
+  .seg button{
+    background:transparent; color:var(--dim); border:0; font:inherit; font-size:12.5px;
+    padding:6px 12px; cursor:pointer; transition:color .2s, background .25s;
+  }
+  .seg button:hover{color:var(--txt)}
+  .seg button.on{
+    background:linear-gradient(120deg, var(--accent), var(--accent-3));
+    color:#fff; font-weight:600;
+  }
+  input[type=number]{
+    width:74px; background:var(--hover); color:var(--txt); border:1px solid var(--line);
+    border-radius:10px; padding:6px 9px; font:inherit; font-size:13px; outline:none;
+    transition:border-color .2s;
+  }
+  input[type=number]:hover{border-color:var(--line-2)}
+
+  /* ==================================================================
+     Responsive + reduced motion
+     ================================================================== */
+  @media(max-width:720px){
+    #sidebar{position:fixed; z-index:30; box-shadow:0 0 60px rgba(0,0,0,.6)}
+    body.closed #sidebar{margin-left:-262px}
+    main{padding:0 14px}
+    header{padding:10px 13px}
+    .start{margin-top:3vh}
+  }
+  @media(prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.001ms !important; animation-iteration-count:1 !important;
+                         transition-duration:.001ms !important; scroll-behavior:auto !important}
+  }
+</style>
+</head>
+<body>
+
+<div id="bgfx"><b></b><b></b><b></b></div>
+
+<aside id="sidebar">
+  <div class="side-top">
+    <button id="burger-in" title="Close sidebar">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h16"/></svg>
+    </button>
+    <button class="side-btn" id="newchat" style="width:auto">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New chat
+    </button>
+  </div>
+  <div class="side-label">Chats</div>
+  <div id="chats"></div>
+  <div class="side-bottom">
+    <button class="side-btn" id="opensettings">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 8.9 19a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 8.4a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings
+    </button>
+  </div>
+</aside>
+
+<div class="app">
+<header>
+  <button id="burger" title="Open sidebar">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h16"/></svg>
+  </button>
+  <h1>Custom LLM</h1>
+  <span class="badge" id="status"><span class="dot"></span>idle</span>
+  <span class="spacer"></span>
+  <select id="model" title="Model">
+    <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M — lighter</option>
+    <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B — better</option>
+  </select>
+</header>
+
+<main>
+  <div id="log">
+    <div class="start" id="start">
+      <div class="orb"></div>
+      <p class="big">Runs entirely in your browser.</p>
+      <p>The model is downloaded once, then kept for offline use.</p>
+      <p class="small" id="device-note"></p>
+      <div>
+        <button class="go" id="go">Load model</button>
+        <button class="ghost" id="wipe">Clear cache</button>
+      </div>
+      <div class="bar" id="bar" style="display:none"><i id="fill"></i></div>
+      <p class="small" id="hint"></p>
+      <p class="saved" id="saved"></p>
+    </div>
+  </div>
+  <button class="jump" id="jump">↓ New messages</button>
+
+  <form id="form" class="spot">
+    <textarea id="input" rows="1" placeholder="Load the model to start…" disabled></textarea>
+    <button id="send" type="submit" disabled>Send</button>
+  </form>
+</main>
+</div>
+
+<div id="settings">
+  <div class="sheet spot">
+    <h2>Settings</h2>
+    <div class="row">
+      <label>Theme</label>
+      <div class="seg" id="theme">
+        <button data-v="dark">Dark</button>
+        <button data-v="light">Light</button>
+        <button data-v="auto">Auto</button>
+      </div>
+    </div>
+    <div class="row">
+      <label>Reply length
+        <span class="note" id="len-note"></span>
+      </label>
+      <div class="seg" id="len">
+        <button data-v="1">1 sentence</button>
+        <button data-v="3">3 sentences</button>
+        <button data-v="0">Full</button>
+      </div>
+    </div>
+    <div class="row">
+      <label>Word limit<span class="note">0 = off</span></label>
+      <input type="number" id="words" min="0" max="500" step="10" value="0">
+    </div>
+    <div class="row">
+      <button class="side-btn" id="wipe2">Clear model cache</button>
+      <button class="mini" id="closesettings">Close</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const log=$('log'), form=$('form'), input=$('input'), send=$('send'), jump=$('jump');
+const start=$('start'), go=$('go'), wipe=$('wipe'), bar=$('bar'), fill=$('fill');
+const hint=$('hint'), saved=$('saved'), statusBox=$('status'), modelSel=$('model');
+const chatsBox=$('chats'), settingsBox=$('settings');
+
+let busy=false, history=[], worker=null, ready=false;
+let chats=[], currentId=null;
+const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+const MAX_TURNS = 6;
+
+const setStatus=(t,c='')=>{ statusBox.innerHTML='<span class="dot '+c+'"></span>'+t; };
+const mo = (n)=>(n/1048576).toFixed(0);
+
+/* ================================================================== *
+ * IndexedDB (main thread: chat history + cache upkeep)
+ * ================================================================== */
+const IDB = {
+  db:null,
+  async open(){
+    if(this.db) return this.db;
+    this.db = await new Promise((res,rej)=>{
+      const r = indexedDB.open('llm-store', 3);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        for(const s of ['files','chunks','meta','chat'])
+          if(!db.objectStoreNames.contains(s)) db.createObjectStore(s);
+      };
+      r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
+    });
+    return this.db;
+  },
+  async _tx(store, mode, fn){
+    const db = await this.open();
+    return new Promise((res,rej)=>{
+      const t = db.transaction(store, mode);
+      const req = fn(t.objectStore(store));
+      if(req && typeof req.onsuccess !== 'undefined'){
+        req.onsuccess = () => res(req.result);
+        req.onerror   = () => rej(req.error);
+      }else{ t.oncomplete = () => res(undefined); }
+      t.onerror = () => rej(t.error);
+      t.onabort = () => rej(t.error);
+    });
+  },
+  get:  (st,k)   => IDB._tx(st,'readonly',  s=>s.get(k)),
+  set:  (st,k,v) => IDB._tx(st,'readwrite', s=>s.put(v,k)),
+  del:  (st,k)   => IDB._tx(st,'readwrite', s=>s.delete(k)),
+  keys: (st)     => IDB._tx(st,'readonly',  s=>s.getAllKeys()),
+  clear:(st)     => IDB._tx(st,'readwrite', s=>s.clear())
+};
+
+/* ================================================================== *
+ * Settings (theme + reply length), kept in localStorage
+ * ================================================================== */
+const DEF = { theme:'dark', sentences:0, words:0 };
+let cfg = DEF;
+try{ cfg = Object.assign({}, DEF, JSON.parse(localStorage.getItem('llm-cfg')||'{}')); }catch(e){}
+
+const media = window.matchMedia('(prefers-color-scheme: light)');
+function applyTheme(){
+  const t = cfg.theme==='auto' ? (media.matches?'light':'dark') : cfg.theme;
+  document.documentElement.dataset.theme = t;
+}
+media.addEventListener('change', ()=>{ if(cfg.theme==='auto') applyTheme(); });
+
+function saveCfg(){
+  localStorage.setItem('llm-cfg', JSON.stringify(cfg));
+  applyTheme(); paintCfg();
+}
+function paintCfg(){
+  for(const b of $('theme').children) b.classList.toggle('on', b.dataset.v===cfg.theme);
+  for(const b of $('len').children)   b.classList.toggle('on', +b.dataset.v===cfg.sentences);
+  $('words').value = cfg.words;
+  const bits=[];
+  if(cfg.sentences) bits.push(cfg.sentences+' sentence'+(cfg.sentences>1?'s':'')+' max');
+  if(cfg.words)     bits.push(cfg.words+' words max');
+  $('len-note').textContent = bits.length ? bits.join(' · ') : 'No limit';
+}
+$('theme').addEventListener('click', e=>{
+  if(e.target.dataset.v){ cfg.theme=e.target.dataset.v; saveCfg(); }
+});
+$('len').addEventListener('click', e=>{
+  if(e.target.dataset.v!==undefined){ cfg.sentences=+e.target.dataset.v; saveCfg(); }
+});
+$('words').addEventListener('change', ()=>{
+  cfg.words = Math.max(0, Math.min(500, +$('words').value||0)); saveCfg();
+});
+$('opensettings').addEventListener('click', ()=>settingsBox.classList.add('show'));
+$('closesettings').addEventListener('click', ()=>settingsBox.classList.remove('show'));
+settingsBox.addEventListener('click', e=>{ if(e.target===settingsBox) settingsBox.classList.remove('show'); });
+applyTheme(); paintCfg();
+
+/* Turns the length settings into a system instruction + a token budget. */
+function lengthRule(){
+  const r=[];
+  if(cfg.sentences) r.push('Answer in at most '+cfg.sentences+' sentence'+(cfg.sentences>1?'s':'')+'.');
+  if(cfg.words)     r.push('Use at most '+cfg.words+' words.');
+  if(r.length)      r.push('Never exceed this limit.');
+  return r.join(' ');
+}
+/* The small models often overshoot the instruction, so the finished
+   answer is also cut to the requested length. */
+function trimToLimit(text){
+  let out = text;
+  if(cfg.sentences){
+    const safe = out.replace(/\.(?=\d)/g, '\u0000');   // keep 3.8.1 in one piece
+    const parts = safe.match(/[^.!?\n]+[.!?]*(\s|$)/g);
+    if(parts && parts.length > cfg.sentences)
+      out = parts.slice(0, cfg.sentences).join('').replace(/\u0000/g, '.').trim();
+  }
+  if(cfg.words){
+    const w = out.split(/\s+/);
+    if(w.length > cfg.words) out = w.slice(0, cfg.words).join(' ').replace(/[,;:]$/,'') + '…';
+  }
+  return out.trim() || text;
+}
+function tokenBudget(){
+  let t = 320;
+  if(cfg.sentences) t = Math.min(t, cfg.sentences*45 + 20);
+  if(cfg.words)     t = Math.min(t, Math.round(cfg.words*1.6) + 20);
+  return Math.max(32, t);
+}
+
+/* ================================================================== *
+ * Sidebar: one entry per conversation
+ * 'list'   : [{id, title, updated}]
+ * 'c:<id>' : that conversation's messages
+ * 'pending': a reply was in flight (chat id + question + partial text)
+ * ================================================================== */
+const narrow = window.innerWidth < 720;
+const sidePref = localStorage.getItem('llm-side');
+if(sidePref==='0' || (sidePref===null && narrow)) document.body.classList.add('closed');
+const toggleSide = ()=>{
+  document.body.classList.toggle('closed');
+  localStorage.setItem('llm-side', document.body.classList.contains('closed')?'0':'1');
+};
+$('burger').addEventListener('click', toggleSide);
+$('burger-in').addEventListener('click', toggleSide);
+
+const newId = ()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const titleOf = (t)=>{ t=t.replace(/\s+/g,' ').trim(); return t.length>34 ? t.slice(0,34)+'…' : t; };
+
+function paintChats(){
+  chatsBox.innerHTML='';
+  for(const c of chats){
+    const el=document.createElement('div');
+    el.className='chat-item'+(c.id===currentId?' active':'');
+    const s=document.createElement('span'); s.textContent=c.title||'New chat';
+    const x=document.createElement('b'); x.textContent='✕'; x.title='Delete';
+    x.addEventListener('click', async ev=>{ ev.stopPropagation(); await delChat(c.id); });
+    el.append(s,x);
+    el.addEventListener('click', ()=>openChat(c.id));
+    chatsBox.appendChild(el);
+  }
+}
+async function saveList(){ try{ await IDB.set('chat','list', chats); }catch(e){} }
+
+function renderHistory(){
+  log.querySelectorAll('.msg').forEach(n=>n.remove());
+  for(const m of history) addMsg(m.role, m.content);
+  syncStart();
+  autoScroll(true);
+}
+/* The welcome block shrinks to a strip once a conversation is on screen. */
+function syncStart(){
+  if(start.isConnected) start.classList.toggle('compact', history.length>0);
+}
+async function newChat(){
+  if(busy) return;
+  const cur = chats.find(c=>c.id===currentId);
+  if(cur && !history.length){ input.focus(); return; }   // already on an empty chat
+  currentId = newId(); history = [];
+  if(start.isConnected) start.classList.remove('compact');
+  chats.unshift({id:currentId, title:'', updated:Date.now()});
+  await saveList(); await IDB.del('chat','pending');
+  paintChats(); renderHistory();
+  if(ready) input.focus();
+}
+async function openChat(id){
+  if(busy || id===currentId) return;
+  currentId = id;
+  history = (await IDB.get('chat','c:'+id)) || [];
+  paintChats(); renderHistory();
+  if(window.innerWidth < 720) document.body.classList.add('closed');
+  if(ready) input.focus();
+}
+async function delChat(id){
+  if(busy) return;
+  chats = chats.filter(c=>c.id!==id);
+  await IDB.del('chat','c:'+id); await saveList();
+  if(id===currentId){
+    if(chats.length) await openChat(chats[0].id);
+    else { currentId=null; await newChat(); }
+  }else paintChats();
+}
+$('newchat').addEventListener('click', newChat);
+
+/* ---- chat persistence --------------------------------------------- */
+let saveTimer = null;
+function saveChat(pending){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try{
+      const c = chats.find(c=>c.id===currentId);
+      if(c){
+        c.updated = Date.now();
+        if(!c.title){
+          const first = history.find(m=>m.role==='user');
+          if(first){ c.title = titleOf(first.content); paintChats(); }
+        }
+        await saveList();
+      }
+      await IDB.set('chat','c:'+currentId, history);
+      if(pending) await IDB.set('chat','pending', Object.assign({chatId:currentId}, pending));
+      else        await IDB.del('chat','pending');
+    }catch(e){}
+  }, 250);   // batch writes during streaming
+}
+
+/* ================================================================== *
+ * Worker: the model runs HERE, not on the page thread.
+ * This is what keeps the UI from freezing during generation.
+ * ================================================================== */
+const WORKER_SRC = `
+const CDNS = [
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1',
+  'https://unpkg.com/@huggingface/transformers@3.8.1'
+];
+let lib=null, generator=null, stopper=null;
+async function loadLib(){
+  if(lib) return lib;
+  let last;
+  for(const u of CDNS){ try{ lib = await import(u); return lib; }catch(e){ last=e; } }
+  throw last;
+}
+
+/* --- IndexedDB (worker side) --- */
+const IDB = {
+  db:null,
+  async open(){
+    if(this.db) return this.db;
+    this.db = await new Promise((res,rej)=>{
+      const r = indexedDB.open('llm-store', 3);
+      r.onupgradeneeded = () => {
+        const db = r.result;
+        for(const s of ['files','chunks','meta','chat'])
+          if(!db.objectStoreNames.contains(s)) db.createObjectStore(s);
+      };
+      r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
+    });
+    return this.db;
+  },
+  async _tx(store,mode,fn){
+    const db = await this.open();
+    return new Promise((res,rej)=>{
+      const t = db.transaction(store,mode);
+      const req = fn(t.objectStore(store));
+      if(req && typeof req.onsuccess !== 'undefined'){
+        req.onsuccess=()=>res(req.result); req.onerror=()=>rej(req.error);
+      }else{ t.oncomplete=()=>res(undefined); }
+      t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error);
+    });
+  },
+  get:(s,k)=>IDB._tx(s,'readonly',o=>o.get(k)),
+  set:(s,k,v)=>IDB._tx(s,'readwrite',o=>o.put(v,k)),
+  del:(s,k)=>IDB._tx(s,'readwrite',o=>o.delete(k))
+};
+
+const customCache = {
+  async match(request){
+    const key = typeof request==='string' ? request : request.url;
+    try{
+      const v = await IDB.get('files', key);
+      const ok = v instanceof Blob || v instanceof ArrayBuffer || ArrayBuffer.isView(v);
+      if(!ok){ if(v!==undefined) await IDB.del('files',key); return undefined; }
+      return new Response(v);
+    }catch(e){ return undefined; }
+  },
+  async put(request, response){
+    const key = typeof request==='string' ? request : request.url;
+    try{
+      const blob = response instanceof Response
+        ? await response.clone().blob() : new Blob([response]);
+      await IDB.set('files', key, blob);
+    }catch(e){}
+  }
+};
+
+/* --- resumable download, 4 MB chunks --- */
+const CHUNK = 4*1024*1024;
+async function resumableFetch(url, onProgress){
+  let total=0, etag='';
+  try{
+    const h = await fetch(url,{method:'HEAD'});
+    total = parseInt(h.headers.get('content-length')||'0',10);
+    etag  = h.headers.get('etag')||'';
+  }catch(e){}
+  if(!total){ const r = await fetch(url); return await r.blob(); }
+
+  const metaKey='meta:'+url;
+  let meta = await IDB.get('meta', metaKey);
+  if(meta && (meta.etag!==etag || meta.total!==total)){
+    for(let i=0;i<meta.count;i++) await IDB.del('chunks', url+'#'+i);
+    meta=null;
+  }
+  if(!meta){
+    meta={etag,total,count:Math.ceil(total/CHUNK)};
+    meta.done=new Array(meta.count).fill(false);
+    await IDB.set('meta', metaKey, meta);
+  }
+  for(let i=0;i<meta.count;i++){
+    if(meta.done[i]) continue;
+    const s=i*CHUNK, e=Math.min(s+CHUNK,total)-1;
+    let ok=false, err=null;
+    for(let a=0;a<3 && !ok;a++){
+      try{
+        const r = await fetch(url,{headers:{Range:'bytes='+s+'-'+e}});
+        if(r.status!==206 && r.status!==200) throw new Error('HTTP '+r.status);
+        await IDB.set('chunks', url+'#'+i, await r.arrayBuffer());
+        ok=true;
+      }catch(ex){ err=ex; await new Promise(r=>setTimeout(r,800*(a+1))); }
+    }
+    if(!ok) throw err||new Error('chunk '+i+' failed');
+    meta.done[i]=true;
+    await IDB.set('meta', metaKey, meta);
+    onProgress(Math.min((i+1)*CHUNK,total), total);
+  }
+  const parts=[];
+  for(let i=0;i<meta.count;i++) parts.push(await IDB.get('chunks', url+'#'+i));
+  const blob = new Blob(parts,{type:'application/octet-stream'});
+  for(let i=0;i<meta.count;i++) await IDB.del('chunks', url+'#'+i);
+  await IDB.del('meta', metaKey);
+  return blob;
+}
+
+async function gpuUsable(){
+  if(!self.navigator.gpu) return false;
+  try{ return !!(await self.navigator.gpu.requestAdapter()); }catch(e){ return false; }
+}
+
+self.onmessage = async (ev) => {
+  const m = ev.data;
+
+  if(m.type === 'stop'){ if(stopper) stopper.interrupt(); return; }
+
+  if(m.type === 'load'){
+    try{
+      const { pipeline, env } = await loadLib();
+      env.allowLocalModels=false; env.useBrowserCache=false;
+      env.useCustomCache=true; env.customCache=customCache;
+      env.backends.onnx.wasm.numThreads = 1;
+
+      const useGPU = await gpuUsable();
+      const plans = useGPU
+        ? [{device:'webgpu',dtype:'q4f16',suffix:'_q4f16',label:'GPU'},
+           {device:'wasm',dtype:'q4',suffix:'_q4',label:'CPU'},
+           {device:'wasm',dtype:'int8',suffix:'_int8',label:'CPU (int8)'}]
+        : [{device:'wasm',dtype:'q4',suffix:'_q4',label:'CPU'},
+           {device:'wasm',dtype:'int8',suffix:'_int8',label:'CPU (int8)'}];
+
+      let label='', lastErr=null;
+      for(const p of plans){
+        try{
+          const url='https://huggingface.co/'+m.modelId+'/resolve/main/onnx/model'+p.suffix+'.onnx';
+          if(await IDB.get('files',url) === undefined){
+            self.postMessage({type:'stage', text:'Downloading model…'});
+            const blob = await resumableFetch(url,(l,t)=>
+              self.postMessage({type:'progress', loaded:l, total:t}));
+            await IDB.set('files', url, blob);
+          }else{
+            self.postMessage({type:'progress', loaded:1, total:1});
+          }
+          self.postMessage({type:'stage', text:'Initialising…'});
+          generator = await pipeline('text-generation', m.modelId,
+                                     {device:p.device, dtype:p.dtype});
+          label=p.label; break;
+        }catch(e){ lastErr=e; generator=null;
+          self.postMessage({type:'stage', text:'Falling back…'}); }
+      }
+      if(!generator) throw lastErr;
+      self.postMessage({type:'ready', label});
+    }catch(e){
+      self.postMessage({type:'error', message:(e&&e.message)?e.message:String(e)});
+    }
+    return;
+  }
+
+  if(m.type === 'generate'){
+    try{
+      const { TextStreamer, InterruptableStoppingCriteria } = await loadLib();
+      stopper = new InterruptableStoppingCriteria();
+      const streamer = new TextStreamer(generator.tokenizer, {
+        skip_prompt:true, skip_special_tokens:true,
+        callback_function:(t)=>{ self.postMessage({type:'token', text:t}); }
+      });
+      await generator(m.messages, {
+        max_new_tokens: m.maxTokens || 320, do_sample:true, temperature:0.6,
+        top_p:0.9, repetition_penalty:1.15, streamer,
+        stopping_criteria: stopper
+      });
+      self.postMessage({type:'done'});
+    }catch(e){
+      self.postMessage({type:'genError', message:(e&&e.message)?e.message:String(e)});
+    }
+  }
+};
+`;
+
+function startWorker(){
+  const url = URL.createObjectURL(new Blob([WORKER_SRC], {type:'text/javascript'}));
+  return new Worker(url, { type:'module' });
+}
+
+/* ================================================================== *
+ * Rendering
+ * ================================================================== */
+function nearBottom(){ return log.scrollHeight - log.scrollTop - log.clientHeight < 120; }
+function autoScroll(force){
+  if(force || nearBottom()){ log.scrollTop = log.scrollHeight; jump.classList.remove('show'); }
+  else jump.classList.add('show');
+}
+jump.addEventListener('click', ()=>autoScroll(true));
+log.addEventListener('scroll', ()=>{ if(nearBottom()) jump.classList.remove('show'); });
+
+function addMsg(role, text, tag){
+  const el=document.createElement('div');
+  el.className='msg '+(role==='user'?'me':'bot');
+  const who=document.createElement('div');
+  who.className='who';
+  who.textContent = role==='user' ? 'You' : 'Model';
+  if(tag){ const s=document.createElement('span'); s.className='tag'; s.textContent=tag; who.appendChild(s); }
+  el.appendChild(who);
+  if(typeof syncStart==='function' && history.length) syncStart();
+  const b=document.createElement('div');
+  b.className='bubble'+(role==='user'?'':' spot'); b.textContent=text;
+  el.appendChild(b); log.appendChild(el);
+  autoScroll();
+  return b;
+}
+function thinkingDots(){
+  const d=document.createElement('span');
+  d.className='think'; d.innerHTML='<i></i><i></i><i></i>';
+  return d;
+}
+
+/* ================================================================== *
+ * Generation
+ * ================================================================== */
+function ask(text, restored){
+  return new Promise((resolve) => {
+    busy=true; send.disabled=false; send.textContent='Stop'; send.classList.add('stop');
+    input.disabled=true;
+    setStatus('generating…','think');
+
+    const bubble = addMsg('assistant', restored || '', restored ? 'resumed' : null);
+    const dots = thinkingDots();
+    const cursor = document.createElement('span');
+    cursor.className='cursor';
+    bubble.appendChild(restored ? cursor : dots);
+
+    let answer = restored || '';
+    let first = !restored;
+
+    const finish = (extra) => {
+      worker.removeEventListener('message', onMsg);
+      dots.remove(); cursor.remove();
+      answer = trimToLimit((answer + (extra||'')).trim());
+      bubble.textContent = answer;
+      const t = bubble.parentElement.querySelector('.tag');
+      if(t) t.remove();
+      history.push({role:'assistant', content:answer});
+      saveChat(null);
+      busy=false; send.textContent='Send'; send.classList.remove('stop');
+      input.disabled=false; send.disabled=false;
+      setStatus(statusLabel,'on');
+      input.focus();
+      resolve();
+    };
+
+    const onMsg = (ev) => {
+      const m = ev.data;
+      if(m.type === 'token'){
+        if(first){ dots.remove(); bubble.appendChild(cursor); first=false; }
+        answer += m.text;
+        bubble.textContent = answer;
+        bubble.appendChild(cursor);
+        autoScroll();
+        // continuous save: if the page dies, we resume here
+        saveChat({ question: text, partial: answer });
+      }
+      else if(m.type === 'done')     finish();
+      else if(m.type === 'genError') finish('\n\n[error] ' + m.message);
+    };
+    worker.addEventListener('message', onMsg);
+
+    const rule = lengthRule();
+    const messages = [
+      { role:'system', content:
+        'You are a helpful assistant. Answer clearly and concisely. '
+        + 'Remember what was said earlier in the conversation.'
+        + (rule ? ' ' + rule : '') },
+      ...history.slice(-MAX_TURNS*2)
+    ];
+    worker.postMessage({ type:'generate', messages, maxTokens: tokenBudget() });
+  });
+}
+
+let statusLabel = '';
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if(busy){                       // the button acts as Stop while generating
+    worker.postMessage({type:'stop'});
+    return;
+  }
+  const text = input.value.trim();
+  if(!text || !ready) return;
+  input.value=''; input.style.height='auto';
+  addMsg('user', text);
+  history.push({role:'user', content:text});
+  saveChat({ question:text, partial:'' });
+  await ask(text);
+});
+
+/* ================================================================== *
+ * Startup
+ * ================================================================== */
+async function gpuUsableMain(){
+  if(!navigator.gpu) return false;
+  try{ return !!(await navigator.gpu.requestAdapter()); }catch(e){ return false; }
+}
+
+(async () => {
+  const note=$('device-note');
+  note.innerHTML = (await gpuUsableMain())
+    ? 'GPU acceleration available.'
+    : 'No GPU acceleration — running on CPU, slower.';
+  try{
+    const ks = await IDB.keys('meta');
+    if(ks && ks.length) saved.textContent = '↻ Unfinished download found — it will resume.';
+  }catch(e){}
+
+  // load the chat list, and migrate the single history of older versions
+  try{
+    chats = (await IDB.get('chat','list')) || [];
+    const legacy = await IDB.get('chat','history');
+    if(Array.isArray(legacy) && legacy.length && !chats.length){
+      const id = newId();
+      const first = legacy.find(m=>m.role==='user');
+      chats = [{id, title:first?titleOf(first.content):'', updated:Date.now()}];
+      await IDB.set('chat','c:'+id, legacy);
+      await saveList();
+    }
+    if(legacy) await IDB.del('chat','history');
+  }catch(e){}
+
+  if(chats.length){
+    currentId = chats[0].id;
+    history = (await IDB.get('chat','c:'+currentId)) || [];
+    paintChats(); renderHistory();
+    if(history.length) saved.textContent += (saved.textContent?' ':'')
+      + '💬 ' + chats.length + ' saved chat' + (chats.length>1?'s':'') + '.';
+  }else{
+    currentId = newId();
+    chats = [{id:currentId, title:'', updated:Date.now()}];
+    await saveList(); paintChats();
+  }
+})();
+
+const doWipe = async () => {
+  await IDB.clear('files'); await IDB.clear('chunks'); await IDB.clear('meta');
+  saved.textContent='Model cache cleared.';
+};
+wipe.addEventListener('click', doWipe);
+$('wipe2').addEventListener('click', doWipe);
+
+go.addEventListener('click', async () => {
+  go.disabled=true; wipe.disabled=true; modelSel.disabled=true;
+  start.classList.add('loading');
+  bar.style.display='block'; hint.textContent='Starting…';
+  setStatus('loading…');
+  try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
+  let lock=null;
+  try{ if(navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); }catch(e){}
+
+  try{ worker = startWorker(); }
+  catch(e){
+    hint.innerHTML='<span style="color:#ff8f8f">Worker failed to start: '+e.message+'</span>';
+    go.disabled=false; wipe.disabled=false; modelSel.disabled=false; return;
+  }
+
+  const modelId = modelSel.value;
+
+  const onLoad = async (ev) => {
+    const m = ev.data;
+    if(m.type === 'stage')    hint.textContent = m.text;
+    else if(m.type === 'progress'){
+      const pct = Math.round(m.loaded/m.total*100);
+      fill.style.width = pct+'%';
+      if(m.total > 1){
+        hint.textContent = pct+'% — '+mo(m.loaded)+' / '+mo(m.total)+' MB';
+        saved.textContent = '✓ '+mo(m.loaded)+' MB saved — you can close the page.';
+      }
+    }
+    else if(m.type === 'ready'){
+      worker.removeEventListener('message', onLoad);
+      try{ if(lock) await lock.release(); }catch(e){}
+      statusLabel = modelId.split('/')[1]+' · '+m.label;
+      setStatus(statusLabel,'on');
+      ready = true;
+      start.remove();
+      input.disabled=false; send.disabled=false;
+      input.placeholder='Message…  (Enter to send)';
+      input.focus();
+      autoScroll(true);
+      await resumePending();
+    }
+    else if(m.type === 'error'){
+      worker.removeEventListener('message', onLoad);
+      try{ if(lock) await lock.release(); }catch(e){}
+      setStatus('error','err'); bar.style.display='none';
+      const box=document.createElement('div'); box.className='err';
+      let advice;
+      if(/memory|allocation|RangeError|buffer|Aborted|OOM/i.test(m.message))
+        advice='Out of memory. Pick <b>SmolLM2 360M</b> and close other tabs.';
+      else if(/fetch|network|Failed to fetch/i.test(m.message))
+        advice='Connection lost. Try again — the download resumes where it stopped.';
+      else
+        advice='Try again — whatever was downloaded is kept.';
+      box.innerHTML='<b>The model could not load.</b><br><br>'+advice
+                   +'<br><br><code>'+m.message+'</code>';
+      start.appendChild(box);
+      go.disabled=false; wipe.disabled=false; modelSel.disabled=false;
+    }
+  };
+  worker.addEventListener('message', onLoad);
+  worker.postMessage({ type:'load', modelId });
+});
+
+/* ---- resume an interrupted reply ------------------------------------ */
+async function resumePending(){
+  let pending=null;
+  try{ pending = await IDB.get('chat','pending'); }catch(e){}
+  if(pending && pending.chatId && pending.chatId !== currentId){
+    await openChat(pending.chatId);
+  }
+  if(pending && pending.question){
+    // A reply was in flight when the page closed. The model's internal
+    // context is gone, so the answer is regenerated from the question.
+    const note = addMsg('assistant',
+      'Resuming interrupted reply…', 'resumed');
+    await new Promise(r=>setTimeout(r,600));
+    note.parentElement.remove();
+    if(history.length && history[history.length-1].role === 'user'){
+      await ask(pending.question);
+    }else{
+      await IDB.del('chat','pending');
+    }
+  }
+}
+
+input.addEventListener('keydown',(e)=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); form.requestSubmit(); }
+});
+input.addEventListener('input',()=>{
+  input.style.height='auto';
+  input.style.height=Math.min(input.scrollHeight,170)+'px';
+});
+
+/* ---- pointer-tracking glow on .spot surfaces ----------------------- */
+let rafId = 0, pending = null;
+document.addEventListener('pointermove', (e) => {
+  pending = e;
+  if(rafId) return;
+  rafId = requestAnimationFrame(() => {
+    rafId = 0;
+    const el = pending.target.closest && pending.target.closest('.spot');
+    if(!el) return;
+    const r = el.getBoundingClientRect();
+    el.style.setProperty('--mx', (pending.clientX - r.left) + 'px');
+    el.style.setProperty('--my', (pending.clientY - r.top) + 'px');
+  });
+}, {passive:true});
+</script>
+</body>
+</html>
