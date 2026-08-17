@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Custom LLM — 100% navigateur</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161920; --line:#252a35;
+    --txt:#e6e8ee; --dim:#8b93a7; --accent:#6ea8fe; --warn:#f0b429; --ok:#3ddc84;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+  }
+  header{
+    width:100%; border-bottom:1px solid var(--line); background:var(--panel);
+    padding:12px 20px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  }
+  header h1{font-size:15px; margin:0; font-weight:600}
+  .badge{font-size:12px; color:var(--dim); border:1px solid var(--line);
+         padding:3px 9px; border-radius:99px; white-space:nowrap}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+       background:var(--warn);margin-right:6px;vertical-align:middle}
+  .dot.on{background:var(--ok)} .dot.err{background:#ff6b6b}
+  .spacer{margin-left:auto}
+  select,.mini{
+    background:var(--bg); color:var(--txt); font:inherit; font-size:13px;
+    border:1px solid var(--line); border-radius:8px; padding:5px 9px; outline:none;
+  }
+  .mini{cursor:pointer}
+  .mini:hover{border-color:var(--accent)}
+  select:disabled{opacity:.5}
+
+  main{width:100%; max-width:780px; flex:1; display:flex; flex-direction:column; padding:0 20px}
+  #log{flex:1; overflow-y:auto; padding:24px 0 10px}
+
+  .start{margin-top:6vh; text-align:center}
+  .start p{color:var(--dim); font-size:14px; margin:0 0 6px}
+  .start .big{color:var(--txt); font-size:17px; font-weight:600; margin-bottom:14px}
+  .go{
+    background:var(--accent); color:#0b0d12; border:0; border-radius:10px;
+    padding:12px 26px; font:inherit; font-weight:600; cursor:pointer; margin-top:10px;
+  }
+  .go:disabled{opacity:.5; cursor:not-allowed}
+  .ghost{
+    background:transparent; color:var(--dim); border:1px solid var(--line);
+    border-radius:10px; padding:9px 16px; font:inherit; font-size:13px;
+    cursor:pointer; margin-top:10px; margin-left:8px;
+  }
+  .ghost:hover{color:var(--txt); border-color:var(--accent)}
+  .small{font-size:12.5px; color:var(--dim); margin-top:14px; line-height:1.7}
+
+  .bar{height:6px; background:var(--line); border-radius:99px; overflow:hidden;
+       margin:18px auto 8px; max-width:420px}
+  .bar i{display:block; height:100%; width:0; background:var(--accent); transition:width .25s}
+  .saved{font-size:12px; color:var(--ok); margin-top:6px}
+
+  .msg{margin-bottom:22px}
+  .who{font-size:11px; text-transform:uppercase; letter-spacing:.9px; color:var(--dim); margin-bottom:6px}
+  .msg.me .who{color:var(--accent)}
+  .bubble{white-space:pre-wrap; word-wrap:break-word}
+  .msg.bot .bubble{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px}
+  .cursor{display:inline-block;width:7px;height:15px;background:var(--accent);
+          vertical-align:-2px;animation:b 1s steps(2) infinite}
+  @keyframes b{50%{opacity:0}}
+
+  form{display:flex; gap:10px; padding:14px 0 22px; border-top:1px solid var(--line)}
+  textarea{flex:1; resize:none; background:var(--panel); color:var(--txt);
+           border:1px solid var(--line); border-radius:10px; padding:11px 13px;
+           font:inherit; max-height:160px; outline:none}
+  textarea:focus{border-color:var(--accent)}
+  textarea:disabled{opacity:.5}
+  form button{background:var(--accent); color:#0b0d12; border:0; border-radius:10px;
+               padding:0 20px; font-weight:600; font-size:14px; cursor:pointer}
+  form button:disabled{opacity:.4; cursor:not-allowed}
+  .err{color:#ff8f8f; font-size:13px; max-width:540px; margin:14px auto 0; text-align:left;
+       background:#2a1a1a; border:1px solid #5c2b2b; border-radius:8px; padding:12px}
+  .warn{color:#ffd98a; font-size:13px; max-width:540px; margin:14px auto 0; text-align:left;
+       background:#2a2415; border:1px solid #5c4c2b; border-radius:8px; padding:12px}
+  code{background:#0b0d12; padding:1px 5px; border-radius:4px; font-size:12.5px;
+       word-break:break-all}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Custom LLM</h1>
+  <span class="badge" id="status"><span class="dot"></span>en veille</span>
+  <span class="spacer"></span>
+  <button class="mini" id="reset" title="Effacer la conversation">Nouvelle conversation</button>
+  <select id="model" title="Modèle">
+    <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M — léger et correct</option>
+    <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B — le meilleur</option>
+  </select>
+</header>
+
+<main>
+  <div id="log">
+    <div class="start" id="start">
+      <p class="big">Le modèle tourne dans ton navigateur.</p>
+      <p>Rien à installer. Aucune commande. Aucun serveur.</p>
+      <p>Le téléchargement est <b>repris automatiquement</b> là où il s'était arrêté :<br>
+         page rechargée, coupure réseau ou téléphone éteint, rien n'est perdu.</p>
+      <p class="small" id="device-note"></p>
+      <div>
+        <button class="go" id="go">Démarrer le modèle</button>
+        <button class="ghost" id="wipe">Vider le cache</button>
+      </div>
+      <div class="bar" id="bar" style="display:none"><i id="fill"></i></div>
+      <p class="small" id="hint"></p>
+      <p class="saved" id="saved"></p>
+    </div>
+  </div>
+
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Démarre le modèle pour discuter…" disabled></textarea>
+    <button id="send" type="submit" disabled>Envoyer</button>
+  </form>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const log=$('log'), form=$('form'), input=$('input'), send=$('send');
+const start=$('start'), go=$('go'), wipe=$('wipe'), bar=$('bar'), fill=$('fill');
+const hint=$('hint'), saved=$('saved'), statusBox=$('status'), modelSel=$('model');
+
+let generator=null, busy=false, history=[];
+const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
+// On ne renvoie que les derniers echanges au modele : un petit modele se
+// noie dans un historique long et se met a deriver.
+const MAX_TURNS = 6;
+
+function setStatus(text, cls=''){
+  statusBox.innerHTML = '<span class="dot '+cls+'"></span>' + text;
+}
+const mo = (n) => (n/1048576).toFixed(0);
+
+/* ================================================================== *
+ * 1. Stockage persistant (IndexedDB)
+ *    Le cache standard du navigateur est trop volatil (et absent en
+ *    file://). On gere nous-memes : morceaux + fichiers assembles.
+ * ================================================================== */
+const IDB = {
+  db:null,
+  async open(){
+    if(this.db) return this.db;
+    this.db = await new Promise((res,rej)=>{
+      const r = indexedDB.open('llm-store', 2);
+      r.onupgradeneeded = (e) => {
+        const db = r.result;
+        if(!db.objectStoreNames.contains('files'))  db.createObjectStore('files');
+        if(!db.objectStoreNames.contains('chunks')) db.createObjectStore('chunks');
+        if(!db.objectStoreNames.contains('meta'))   db.createObjectStore('meta');
+      };
+      r.onsuccess = ()=>res(r.result);
+      r.onerror   = ()=>rej(r.error);
+    });
+    return this.db;
+  },
+  // On attend le succes de la REQUETE et on lit request.result.
+  // (Piege : si on attend seulement la transaction, une clef absente
+  //  renvoie l'objet IDBRequest au lieu de undefined.)
+  async _tx(store, mode, fn){
+    const db = await this.open();
+    return new Promise((res,rej)=>{
+      const t = db.transaction(store, mode);
+      const req = fn(t.objectStore(store));
+      if(req && typeof req.onsuccess !== 'undefined'){
+        req.onsuccess = () => res(req.result);   // undefined si absent : correct
+        req.onerror   = () => rej(req.error);
+      }else{
+        t.oncomplete = () => res(undefined);
+      }
+      t.onerror = () => rej(t.error);
+      t.onabort = () => rej(t.error);
+    });
+  },
+  get:  (st,k)   => IDB._tx(st,'readonly',  s=>s.get(k)),
+  set:  (st,k,v) => IDB._tx(st,'readwrite', s=>s.put(v,k)),
+  del:  (st,k)   => IDB._tx(st,'readwrite', s=>s.delete(k)),
+  keys: (st)     => IDB._tx(st,'readonly',  s=>s.getAllKeys()),
+  clear:(st)     => IDB._tx(st,'readwrite', s=>s.clear())
+};
+
+// Demande au navigateur de ne PAS effacer nos donnees quand il fait le menage.
+async function askPersistence(){
+  try{
+    if(navigator.storage && navigator.storage.persist){
+      if(!(await navigator.storage.persisted())) await navigator.storage.persist();
+    }
+  }catch(e){}
+}
+
+/* ================================================================== *
+ * 2. Telechargement REPRENABLE
+ *    Le fichier est decoupe en tranches de 4 Mo. Chaque tranche est
+ *    ecrite dans IndexedDB des qu'elle arrive. Si la page se ferme,
+ *    on repart de la premiere tranche manquante.
+ * ================================================================== */
+const CHUNK = 4 * 1024 * 1024;
+
+async function resumableFetch(url, onProgress){
+  // Taille + empreinte du fichier distant
+  let total = 0, etag = '';
+  try{
+    const h = await fetch(url, { method:'HEAD' });
+    total = parseInt(h.headers.get('content-length') || '0', 10);
+    etag  = h.headers.get('etag') || '';
+  }catch(e){}
+
+  // Serveur sans requetes partielles : on retombe sur un telechargement simple
+  if(!total){
+    const r = await fetch(url);
+    return await r.blob();
+  }
+
+  const metaKey = 'meta:' + url;
+  let meta = await IDB.get('meta', metaKey);
+
+  // Le fichier a change en ligne -> on jette les vieilles tranches
+  if(meta && (meta.etag !== etag || meta.total !== total)){
+    for(let i=0;i<meta.count;i++) await IDB.del('chunks', url+'#'+i);
+    meta = null;
+  }
+  if(!meta){
+    meta = { etag, total, count: Math.ceil(total/CHUNK), done:[] };
+    meta.done = new Array(meta.count).fill(false);
+    await IDB.set('meta', metaKey, meta);
+  }
+
+  let have = meta.done.filter(Boolean).length * CHUNK;
+  if(have > 0){
+    saved.textContent = '↻ Reprise : ' + mo(Math.min(have,total)) + ' Mo déjà enregistrés.';
+  }
+
+  for(let i=0; i<meta.count; i++){
+    if(meta.done[i]) continue;
+    const s = i*CHUNK, e = Math.min(s+CHUNK, total) - 1;
+
+    // Une tranche ratee est retentee 3 fois avant d'abandonner
+    let ok = false, err = null;
+    for(let a=0; a<3 && !ok; a++){
+      try{
+        const r = await fetch(url, { headers:{ Range:'bytes='+s+'-'+e } });
+        if(r.status !== 206 && r.status !== 200) throw new Error('HTTP '+r.status);
+        const buf = await r.arrayBuffer();
+        await IDB.set('chunks', url+'#'+i, buf);
+        ok = true;
+      }catch(ex){ err = ex; await new Promise(r=>setTimeout(r, 800*(a+1))); }
+    }
+    if(!ok) throw err || new Error('tranche ' + i + ' impossible à récupérer');
+
+    meta.done[i] = true;
+    await IDB.set('meta', metaKey, meta);   // <- progression sauvegardee ICI
+    have = meta.done.filter(Boolean).length * CHUNK;
+    onProgress(Math.min(have,total), total);
+    saved.textContent = '✓ ' + mo(Math.min(have,total)) + ' Mo enregistrés — '
+                      + 'tu peux fermer la page, la reprise se fera ici.';
+  }
+
+  // Assemblage en Blob (et non en gros tableau) : le navigateur peut le
+  // garder sur disque au lieu de tout charger en memoire d'un coup.
+  const parts = [];
+  for(let i=0;i<meta.count;i++) parts.push(await IDB.get('chunks', url+'#'+i));
+  const blob = new Blob(parts, { type:'application/octet-stream' });
+
+  // Tranches devenues inutiles -> on libere la place
+  for(let i=0;i<meta.count;i++) await IDB.del('chunks', url+'#'+i);
+  await IDB.del('meta', metaKey);
+
+  return blob;
+}
+
+/* ================================================================== *
+ * 3. Cache branche sur transformers.js
+ *    La librairie appelle match()/put() avec l'URL distante en clef.
+ *    On y depose a l'avance le gros fichier telecharge en tranches.
+ * ================================================================== */
+const customCache = {
+  async match(request){
+    const key = typeof request === 'string' ? request : request.url;
+    try{
+      const v = await IDB.get('files', key);
+      // Ceinture et bretelles : on ne renvoie QUE de vraies donnees binaires.
+      const ok = v instanceof Blob || v instanceof ArrayBuffer || ArrayBuffer.isView(v);
+      if(!ok){
+        if(v !== undefined) await IDB.del('files', key);  // entree corrompue -> purge
+        return undefined;
+      }
+      return new Response(v);
+    }catch(e){ return undefined; }
+  },
+  async put(request, response){
+    const key = typeof request === 'string' ? request : request.url;
+    try{
+      const blob = response instanceof Response
+        ? await response.clone().blob()
+        : new Blob([response]);
+      await IDB.set('files', key, blob);
+    }catch(e){ /* plus de place : on continue sans cacher */ }
+  }
+};
+
+/* --- librairie, avec CDN de secours --------------------------------- */
+const CDNS = [
+  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1',
+  'https://unpkg.com/@huggingface/transformers@3.8.1'
+];
+let libCache = null;
+async function loadLib(){
+  if(libCache) return libCache;
+  let last;
+  for(const url of CDNS){
+    try{ libCache = await import(url); return libCache; }catch(e){ last = e; }
+  }
+  throw last;
+}
+
+/* --- note d'accueil ------------------------------------------------- */
+async function gpuUsable(){
+  if(!navigator.gpu) return false;
+  try{ return !!(await navigator.gpu.requestAdapter()); }catch(e){ return false; }
+}
+
+(async () => {
+  const note = $('device-note');
+  const gpu = await gpuUsable();
+  if(gpu){
+    note.innerHTML = 'Accélération GPU disponible sur cet appareil.';
+  }else{
+    note.innerHTML = 'Pas d\u2019accélération GPU ici — exécution sur le processeur, plus lente.'
+      + (isMobile ? ' Sur téléphone, évite le modèle 0.5B : il fait souvent planter l\u2019onglet.' : '');
+    if(isMobile) modelSel.value = 'HuggingFaceTB/SmolLM2-360M-Instruct';
+  }
+  // Y a-t-il un telechargement en cours a reprendre ?
+  try{
+    const ks = await IDB.keys('meta');
+    if(ks && ks.length) saved.textContent = '↻ Un téléchargement interrompu a été trouvé : il reprendra où il s\u2019était arrêté.';
+  }catch(e){}
+})();
+
+/* --- vider le cache -------------------------------------------------- */
+wipe.addEventListener('click', async () => {
+  await IDB.clear('files'); await IDB.clear('chunks'); await IDB.clear('meta');
+  saved.textContent = 'Cache vidé.';
+});
+
+/* ================================================================== *
+ * 4. Demarrage
+ * ================================================================== */
+go.addEventListener('click', async () => {
+  go.disabled = true; wipe.disabled = true; modelSel.disabled = true;
+  bar.style.display = 'block';
+  hint.textContent = 'Préparation…';
+  setStatus('chargement…');
+  await askPersistence();
+
+  // Garde l'ecran allume : un telephone en veille suspend le telechargement.
+  let lock = null;
+  try{ if(navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); }catch(e){}
+
+  const modelId = modelSel.value;
+
+  try{
+    const { pipeline, env } = await loadLib();
+    env.allowLocalModels = false;
+    env.useBrowserCache  = false;
+    env.useCustomCache   = true;
+    env.customCache      = customCache;
+    env.backends.onnx.wasm.numThreads = 1;
+
+    const useGPU = await gpuUsable();
+    const plans = useGPU
+      ? [ {device:'webgpu', dtype:'q4f16', suffix:'_q4f16', label:'GPU (WebGPU)'},
+          {device:'wasm',   dtype:'q4',    suffix:'_q4',    label:'processeur'},
+          {device:'wasm',   dtype:'int8',  suffix:'_int8',  label:'processeur (int8)'} ]
+      : [ {device:'wasm',   dtype:'q4',    suffix:'_q4',    label:'processeur'},
+          {device:'wasm',   dtype:'int8',  suffix:'_int8',  label:'processeur (int8)'} ];
+
+    let usedLabel = '', lastErr = null;
+
+    for(const plan of plans){
+      try{
+        // (a) Le gros fichier de poids, en tranches reprenables
+        const weightsURL = 'https://huggingface.co/' + modelId
+                         + '/resolve/main/onnx/model' + plan.suffix + '.onnx';
+
+        if(await IDB.get('files', weightsURL) === undefined){
+          hint.textContent = 'Récupération du modèle…';
+          const blob = await resumableFetch(weightsURL, (l,t) => {
+            const pct = Math.round(l/t*100);
+            fill.style.width = pct + '%';
+            hint.textContent = 'Récupération du modèle — ' + pct + '% ('
+                             + mo(l) + ' / ' + mo(t) + ' Mo)';
+          });
+          await IDB.set('files', weightsURL, blob);
+        }else{
+          fill.style.width = '100%';
+          hint.textContent = 'Modèle déjà enregistré — chargement immédiat.';
+        }
+
+        // (b) Le reste (petits fichiers texte) par la librairie
+        hint.textContent = 'Initialisation du modèle…';
+        generator = await pipeline('text-generation', modelId, {
+          device: plan.device,
+          dtype:  plan.dtype,
+          progress_callback: (p) => {
+            if(p.status === 'progress' && p.total && p.total > 2e6){
+              const pct = Math.round(p.loaded/p.total*100);
+              fill.style.width = pct + '%';
+            }
+          }
+        });
+        usedLabel = plan.label;
+        break;
+      }catch(e){
+        lastErr = e; generator = null;
+        hint.textContent = 'Cette configuration a échoué, essai de la suivante…';
+      }
+    }
+    if(!generator) throw lastErr;
+
+    fill.style.width = '100%';
+    setStatus(modelId.split('/')[1] + ' · ' + usedLabel, 'on');
+    start.remove();
+    input.disabled = false; send.disabled = false;
+    input.placeholder = 'Écris ton message…  (Entrée pour envoyer)';
+    input.focus();
+
+  }catch(err){
+    setStatus('erreur','err');
+    bar.style.display = 'none';
+    const msg = (err && err.message ? err.message : String(err));
+    const box = document.createElement('div');
+    box.className = 'err';
+    let advice;
+    if(/memory|allocation|RangeError|buffer|Aborted|OOM/i.test(msg)){
+      advice = 'L\u2019appareil a manqué de mémoire pendant le chargement. '
+             + 'Choisis <b>SmolLM2 360M</b> en haut et ferme les autres onglets. '
+             + 'Bonne nouvelle : le téléchargement déjà fait est conservé.';
+    }else if(/fetch|network|NetworkError|Failed to fetch/i.test(msg)){
+      advice = 'La connexion a été interrompue. Relance : '
+             + 'le téléchargement <b>reprendra où il s\u2019est arrêté</b>.';
+    }else{
+      advice = 'Relance le chargement : ce qui a déjà été récupéré est conservé. '
+             + 'Si ça persiste, essaie un modèle plus léger.';
+    }
+    box.innerHTML = '<b>Le modèle n\u2019a pas pu se charger.</b><br><br>' + advice
+                  + '<br><br><code>' + msg + '</code>';
+    start.appendChild(box);
+    go.disabled = false; wipe.disabled = false; modelSel.disabled = false;
+  }finally{
+    try{ if(lock) await lock.release(); }catch(e){}
+  }
+});
+
+/* ================================================================== *
+ * 5. Conversation
+ * ================================================================== */
+function addMsg(role, text){
+  const el = document.createElement('div');
+  el.className = 'msg ' + (role === 'user' ? 'me' : 'bot');
+  el.innerHTML = '<div class="who">' + (role==='user'?'Toi':'Modèle') + '</div>';
+  const b = document.createElement('div');
+  b.className = 'bubble'; b.textContent = text;
+  el.appendChild(b); log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return b;
+}
+
+$('reset').addEventListener('click', () => {
+  history = [];
+  log.querySelectorAll('.msg').forEach(n => n.remove());
+  input.focus();
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if(!text || busy || !generator) return;
+
+  busy = true; send.disabled = true;
+  input.value = ''; input.style.height = 'auto';
+
+  addMsg('user', text);
+  history.push({ role:'user', content:text });
+
+  const bubble = addMsg('assistant','');
+  const cursor = document.createElement('span');
+  cursor.className = 'cursor';
+  bubble.appendChild(cursor);
+
+  let answer = '';
+  try{
+    const { TextStreamer } = await loadLib();
+    const streamer = new TextStreamer(generator.tokenizer, {
+      skip_prompt:true, skip_special_tokens:true,
+      callback_function:(t) => {
+        answer += t;
+        bubble.textContent = answer;
+        bubble.appendChild(cursor);
+        log.scrollTop = log.scrollHeight;
+      }
+    });
+
+    const messages = [
+      { role:'system', content:
+        'Tu es un assistant francais. Reponds de maniere utile, claire et concise. '
+        + 'Tu te souviens de ce qui a ete dit plus haut dans la conversation.' },
+      ...history.slice(-MAX_TURNS * 2)
+    ];
+
+    await generator(messages, {
+      max_new_tokens: 320,
+      do_sample: true,
+      temperature: 0.6,
+      top_p: 0.9,
+      repetition_penalty: 1.15,   // evite que le modele tourne en boucle
+      streamer
+    });
+  }catch(err){
+    answer += '\n\n[erreur] ' + (err && err.message ? err.message : err);
+    bubble.textContent = answer;
+  }
+
+  cursor.remove();
+  answer = answer.trim();
+  bubble.textContent = answer;
+  history.push({ role:'assistant', content:answer });
+  busy = false; send.disabled = false; input.focus();
+});
+
+input.addEventListener('keydown', (e) => {
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); form.requestSubmit(); }
+});
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight,160) + 'px';
+});
+</script>
+</body>
+</html>
